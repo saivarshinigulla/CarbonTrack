@@ -257,6 +257,7 @@ class GoalServiceTest {
 
     private ActivityLog activity(LocalDate date, String emissions) {
         return new ActivityLog(user, "transport", "car_travel", BigDecimal.ONE,
-                "km", new BigDecimal(emissions), date);
+                "km", new BigDecimal(emissions), date,
+                null, null, null, null, null, null, null);
     }
 }
