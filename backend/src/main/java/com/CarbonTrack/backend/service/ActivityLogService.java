@@ -6,9 +6,11 @@ import com.CarbonTrack.backend.entity.ActivityLog;
 import com.CarbonTrack.backend.entity.User;
 import com.CarbonTrack.backend.repository.ActivityLogRepository;
 import com.CarbonTrack.backend.repository.UserRepository;
+import com.CarbonTrack.backend.event.ActivityLoggedEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -20,14 +22,17 @@ public class ActivityLogService {
     private final ActivityLogRepository activityLogRepository;
     private final UserRepository userRepository;
     private final EmissionCalculationService emissionCalculationService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public ActivityLogService(
             ActivityLogRepository activityLogRepository,
             UserRepository userRepository,
-            EmissionCalculationService emissionCalculationService) {
+            EmissionCalculationService emissionCalculationService,
+            ApplicationEventPublisher eventPublisher) {
         this.activityLogRepository = activityLogRepository;
         this.userRepository = userRepository;
         this.emissionCalculationService = emissionCalculationService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -78,7 +83,9 @@ public class ActivityLogService {
                 request.flightDistanceKm()
         );
 
-        return activityLogRepository.save(activityLog);
+        ActivityLog saved = activityLogRepository.save(activityLog);
+        eventPublisher.publishEvent(new ActivityLoggedEvent(user.getId(), saved.getLogDate()));
+        return saved;
     }
 
     @Transactional(readOnly = true)
