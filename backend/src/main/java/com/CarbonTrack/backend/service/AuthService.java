@@ -13,6 +13,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Locale;
+import java.util.Optional;
+
 @Service
 public class AuthService {
 
@@ -36,6 +39,11 @@ public class AuthService {
 
         String username = request.username().trim();
         String email = request.email().trim().toLowerCase();
+
+        if (isUsernamePassword(username, request.password())) {
+            throw new IllegalArgumentException(
+                    "Password must not be the same as the username");
+        }
 
         if (userRepository.findByUsername(username).isPresent()) {
             throw new IllegalArgumentException(
@@ -61,10 +69,19 @@ public class AuthService {
     @Transactional(readOnly = true)
     public String login(LoginRequest request) {
 
+        String identifier = request.username().trim();
         User user = userRepository
-                .findByUsername(request.username().trim())
+                .findByUsername(identifier)
+                .or(() -> findUniqueUsernameIgnoreCase(identifier))
+                .or(() -> userRepository.findByEmail(
+                        identifier.toLowerCase(Locale.ROOT)))
                 .orElseThrow(() -> new BadCredentialsException(
                         "Invalid username or password"));
+
+        if (isUsernamePassword(user.getUsername(), request.password())) {
+            throw new BadCredentialsException(
+                    "Invalid username or password");
+        }
 
         if (!passwordEncoder.matches(
                 request.password(),
@@ -90,6 +107,12 @@ public class AuthService {
                         HttpStatus.UNAUTHORIZED,
                         "Authenticated user was not found"));
 
+        if (isUsernamePassword(user.getUsername(), request.newPassword())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "New password must not be the same as the username");
+        }
+
         // Verify the current password
         if (!passwordEncoder.matches(
                 request.currentPassword(),
@@ -114,5 +137,16 @@ public class AuthService {
                 passwordEncoder.encode(request.newPassword()));
 
         userRepository.save(user);
+    }
+
+    private boolean isUsernamePassword(String username, String password) {
+        return username.equalsIgnoreCase(password);
+    }
+
+    private Optional<User> findUniqueUsernameIgnoreCase(String username) {
+        var matches = userRepository.findAllByUsernameIgnoreCase(username);
+        return matches.size() == 1
+                ? Optional.of(matches.get(0))
+                : Optional.empty();
     }
 }

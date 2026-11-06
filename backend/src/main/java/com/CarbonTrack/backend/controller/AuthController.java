@@ -2,13 +2,17 @@ package com.CarbonTrack.backend.controller;
 
 import com.CarbonTrack.backend.dto.AuthResponse;
 import com.CarbonTrack.backend.dto.ChangePasswordRequest;
+import com.CarbonTrack.backend.dto.ForgotPasswordRequest;
 import com.CarbonTrack.backend.dto.LoginRequest;
 import com.CarbonTrack.backend.dto.RegisterRequest;
+import com.CarbonTrack.backend.dto.ResetPasswordRequest;
 import com.CarbonTrack.backend.entity.User;
 import com.CarbonTrack.backend.service.AuthService;
+import com.CarbonTrack.backend.service.PasswordResetService;
 
 import jakarta.validation.Valid;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -27,9 +31,13 @@ import java.util.Map;
 public class AuthController {
 
     private final AuthService authService;
+    private final PasswordResetService passwordResetService;
 
-    public AuthController(AuthService authService) {
+    public AuthController(
+            AuthService authService,
+            PasswordResetService passwordResetService) {
         this.authService = authService;
+        this.passwordResetService = passwordResetService;
     }
 
     // Register a new user
@@ -56,6 +64,30 @@ public class AuthController {
         String token = authService.login(request);
 
         return new TokenResponse(token, "Bearer");
+    }
+
+    @PostMapping("/password-reset/request")
+    public Map<String, String> requestPasswordReset(
+            @Valid @RequestBody ForgotPasswordRequest request,
+            HttpServletRequest servletRequest) {
+        passwordResetService.requestReset(
+                request.email(),
+                servletRequest.getRemoteAddr()
+        );
+        return Map.of(
+                "message",
+                PasswordResetService.GENERIC_REQUEST_MESSAGE
+        );
+    }
+
+    @PostMapping("/password-reset/confirm")
+    public Map<String, String> confirmPasswordReset(
+            @Valid @RequestBody ResetPasswordRequest request) {
+        passwordResetService.confirmReset(
+                request.token(),
+                request.newPassword()
+        );
+        return Map.of("message", "Your password has been reset successfully.");
     }
 
     // Change password for the authenticated user

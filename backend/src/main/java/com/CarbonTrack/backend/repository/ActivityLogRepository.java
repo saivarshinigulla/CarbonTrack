@@ -9,11 +9,14 @@ import org.springframework.data.repository.query.Param;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 public interface ActivityLogRepository
         extends JpaRepository<ActivityLog, Long> {
 
     List<ActivityLog> findByUserIdOrderByLogDateDesc(Long userId);
+
+    Optional<ActivityLog> findByIdAndUserId(Long id, Long userId);
 
     List<ActivityLog> findByUserIdAndLogDateBetweenOrderByLogDateDesc(
             Long userId,

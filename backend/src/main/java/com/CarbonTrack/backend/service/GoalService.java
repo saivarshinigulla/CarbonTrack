@@ -29,6 +29,7 @@ public class GoalService {
 
     private static final BigDecimal ONE_HUNDRED = new BigDecimal("100");
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(4);
+    private static final int BASELINE_DAYS = 7;
 
     private final ApplicationEventPublisher eventPublisher;
     private final GoalRepository goalRepository;
@@ -58,6 +59,8 @@ public class GoalService {
                 request.startDate(),
                 "ACTIVE"
         );
+        initializeBaseline(
+                goal, user.getId(), request.startDate(), LocalDate.now());
 
         return toResponse(goalRepository.save(goal));
     }
@@ -95,7 +98,8 @@ public class GoalService {
 
         goal.setTargetReductionPct(request.targetReductionPct());
         goal.setPeriodDays(request.periodDays());
-        goal.setStartDate(request.startDate());
+        initializeBaseline(
+                goal, user.getId(), request.startDate(), LocalDate.now());
 
         return toResponse(goalRepository.save(goal));
     }
@@ -113,26 +117,87 @@ public class GoalService {
         Goal goal = requireOwnedGoal(goalId, user.getId());
 
         LocalDate today = LocalDate.now();
+        if ("BASELINE_PENDING".equalsIgnoreCase(goal.getStatus())) {
+            if (goal.getBaselineStartDate() == null
+                    || goal.getBaselineEndDate() == null) {
+                initializeBaseline(
+                        goal, user.getId(), goal.getStartDate(), today);
+            }
+
+            if (!today.isAfter(goal.getBaselineEndDate())) {
+                return pendingBaselineProgress(goal);
+            }
+
+            BigDecimal collectedBaseline = totalEmissions(
+                    user.getId(),
+                    goal.getBaselineStartDate(),
+                    goal.getBaselineEndDate());
+            if (collectedBaseline.compareTo(BigDecimal.ZERO) > 0) {
+                goal.setBaselineFootprintKg(collectedBaseline);
+                goal.setBaselinePeriodDays(BASELINE_DAYS);
+                goal.setStatus("ACTIVE");
+                goal.setStartDate(goal.getBaselineEndDate().plusDays(1));
+                goalRepository.save(goal);
+            } else {
+                goal.setBaselineStartDate(today);
+                goal.setBaselineEndDate(today.plusDays(BASELINE_DAYS - 1L));
+                goal.setBaselinePeriodDays(BASELINE_DAYS);
+                goal.setStartDate(today.plusDays(BASELINE_DAYS));
+                goalRepository.save(goal);
+                return pendingBaselineProgress(goal);
+            }
+        }
+
         LocalDate start = goal.getStartDate();
         LocalDate end = start.plusDays(goal.getPeriodDays() - 1L);
 
-        BigDecimal baseline = totalEmissions(
-                user.getId(),
-                start.minusDays(goal.getPeriodDays()),
-                start.minusDays(1)
-        );
+        LocalDate baselineStart = goal.getBaselineStartDate();
+        LocalDate baselineEnd = goal.getBaselineEndDate();
+        BigDecimal baseline = goal.getBaselineFootprintKg();
+        Integer baselinePeriodDays = goal.getBaselinePeriodDays();
+        if (baseline == null) {
+            baselineStart = start.minusDays(goal.getPeriodDays());
+            baselineEnd = start.minusDays(1);
+            baseline = totalEmissions(user.getId(), baselineStart, baselineEnd);
+            baselinePeriodDays = goal.getPeriodDays();
+            if (baseline.compareTo(BigDecimal.ZERO) > 0) {
+                goal.setBaselineStartDate(baselineStart);
+                goal.setBaselineEndDate(baselineEnd);
+                goal.setBaselinePeriodDays(baselinePeriodDays);
+                goal.setBaselineFootprintKg(baseline);
+                goalRepository.save(goal);
+            }
+        }
+        if (baselinePeriodDays == null || baselinePeriodDays < 1) {
+            baselinePeriodDays = goal.getPeriodDays();
+        }
+        boolean baselineAvailable = baseline != null
+                && baseline.compareTo(BigDecimal.ZERO) > 0;
 
         LocalDate observedEnd = today.isBefore(start)
                 ? start.minusDays(1)
                 : (today.isAfter(end) ? end : today);
 
-        BigDecimal current = observedEnd.isBefore(start)
-                ? ZERO
-                : totalEmissions(user.getId(), start, observedEnd);
-
-        BigDecimal target = baseline
-                .multiply(ONE_HUNDRED.subtract(goal.getTargetReductionPct()))
-                .divide(ONE_HUNDRED, 4, RoundingMode.HALF_UP);
+        List<ActivityLog> currentLogs = observedEnd.isBefore(start)
+                ? List.of()
+                : activityLogRepository
+                        .findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                                user.getId(), start, observedEnd);
+        BigDecimal currentTotal = currentLogs.stream()
+                .map(ActivityLog::getCo2eKg)
+                .filter(value -> value != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(4, RoundingMode.HALF_UP);
+        boolean currentDataAvailable = !currentLogs.isEmpty();
+        BigDecimal target = baselineAvailable
+                ? baseline
+                        .multiply(BigDecimal.valueOf(goal.getPeriodDays()))
+                        .divide(BigDecimal.valueOf(baselinePeriodDays),
+                                4, RoundingMode.HALF_UP)
+                        .multiply(ONE_HUNDRED.subtract(
+                                goal.getTargetReductionPct()))
+                        .divide(ONE_HUNDRED, 4, RoundingMode.HALF_UP)
+                : null;
 
         int elapsedDays = today.isBefore(start)
                 ? 0
@@ -149,10 +214,10 @@ public class GoalService {
 
         BigDecimal projected = null;
         BigDecimal currentReduction = null;
+        BigDecimal goalCompletion = null;
         Boolean onTrack = null;
 
         List<String> alerts = new ArrayList<>();
-        boolean baselineAvailable = baseline.compareTo(BigDecimal.ZERO) > 0;
 
         if (today.isBefore(start)) {
             alerts.add("NOT_STARTED: This goal has not started yet.");
@@ -163,26 +228,24 @@ public class GoalService {
                                 + "progress will be measurable once a valid baseline exists."
                 );
             }
-        } else if (baselineAvailable && elapsedDays > 0) {
+        } else if (baselineAvailable && currentDataAvailable && elapsedDays > 0) {
             BigDecimal baselineToDate = baseline
                     .multiply(BigDecimal.valueOf(elapsedDays))
-                    .divide(
-                            BigDecimal.valueOf(goal.getPeriodDays()),
-                            4,
-                            RoundingMode.HALF_UP
-                    );
+                    .divide(BigDecimal.valueOf(baselinePeriodDays),
+                            8, RoundingMode.HALF_UP);
 
-            currentReduction = baselineToDate.compareTo(BigDecimal.ZERO) == 0
-                    ? BigDecimal.ZERO.setScale(2)
-                    : baselineToDate.subtract(current)
+            currentReduction = baselineToDate.subtract(currentTotal)
                     .multiply(ONE_HUNDRED)
                     .divide(
                             baselineToDate,
                             2,
                             RoundingMode.HALF_UP
                     );
+            goalCompletion = currentReduction
+                    .multiply(ONE_HUNDRED)
+                    .divide(goal.getTargetReductionPct(), 2, RoundingMode.HALF_UP);
 
-            projected = current
+            projected = currentTotal
                     .multiply(BigDecimal.valueOf(goal.getPeriodDays()))
                     .divide(
                             BigDecimal.valueOf(elapsedDays),
@@ -206,12 +269,17 @@ public class GoalService {
                     "BASELINE_UNAVAILABLE: No emissions were recorded during the baseline period; "
                             + "log activities in that period to calculate a meaningful reduction."
             );
+        } else if (!currentDataAvailable && elapsedDays > 0) {
+            alerts.add(
+                    "CURRENT_DATA_UNAVAILABLE: Log activity data for this goal period before calculating reduction progress."
+            );
         }
 
         String status = goal.getStatus();
 
         if (today.isAfter(end) && "ACTIVE".equalsIgnoreCase(status)) {
-            if (baselineAvailable && current.compareTo(target) <= 0) {
+            if (baselineAvailable && currentDataAvailable
+                    && currentTotal.compareTo(target) <= 0) {
                 status = "ACHIEVED";
                 alerts.add("GOAL_ACHIEVED: You met your footprint-reduction target.");
             } else {
@@ -240,16 +308,85 @@ public class GoalService {
                 goal.getPeriodDays(),
                 start,
                 end,
-                scale(baseline),
-                scale(target),
-                scale(current),
+                baselineAvailable ? scale(baseline) : null,
+                target == null ? null : scale(target),
+                currentDataAvailable ? scale(currentTotal) : null,
                 projected == null ? null : scale(projected),
                 currentReduction,
+                goalCompletion,
                 elapsedDays,
                 daysRemaining,
                 onTrack,
-                List.copyOf(alerts)
+                List.copyOf(alerts),
+                baselinePeriodDays,
+                baselineStart,
+                baselineEnd
         );
+    }
+
+    private GoalProgressResponse pendingBaselineProgress(Goal goal) {
+        List<String> alerts = List.of(
+                "BASELINE_PENDING: Log activities during the seven-day baseline period before this goal can start.",
+                "BASELINE_WINDOW: "
+                        + goal.getBaselineStartDate()
+                        + " through "
+                        + goal.getBaselineEndDate()
+        );
+        return new GoalProgressResponse(
+                goal.getId(),
+                goal.getStatus(),
+                goal.getTargetReductionPct(),
+                goal.getPeriodDays(),
+                goal.getStartDate(),
+                goal.getStartDate().plusDays(goal.getPeriodDays() - 1L),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0,
+                goal.getPeriodDays(),
+                null,
+                alerts,
+                BASELINE_DAYS,
+                goal.getBaselineStartDate(),
+                goal.getBaselineEndDate()
+        );
+    }
+
+    private void initializeBaseline(
+            Goal goal,
+            Long userId,
+            LocalDate requestedStart,
+            LocalDate today) {
+        LocalDate historicalStart =
+                requestedStart.minusDays(goal.getPeriodDays());
+        LocalDate historicalEnd = requestedStart.minusDays(1);
+        BigDecimal historicalBaseline = totalEmissions(
+                userId, historicalStart, historicalEnd);
+
+        if (historicalBaseline.compareTo(BigDecimal.ZERO) > 0) {
+            goal.setStartDate(requestedStart);
+            goal.setStatus("ACTIVE");
+            goal.setBaselineStartDate(historicalStart);
+            goal.setBaselineEndDate(historicalEnd);
+            goal.setBaselinePeriodDays(goal.getPeriodDays());
+            goal.setBaselineFootprintKg(historicalBaseline);
+            return;
+        }
+
+        LocalDate earliestStart = today.plusDays(BASELINE_DAYS);
+        LocalDate goalStart = requestedStart.isAfter(earliestStart)
+                ? requestedStart : earliestStart;
+        LocalDate baselineStart = goalStart.minusDays(BASELINE_DAYS);
+
+        goal.setStartDate(goalStart);
+        goal.setStatus("BASELINE_PENDING");
+        goal.setBaselineStartDate(baselineStart);
+        goal.setBaselineEndDate(goalStart.minusDays(1));
+        goal.setBaselinePeriodDays(BASELINE_DAYS);
+        goal.setBaselineFootprintKg(null);
     }
 
     private BigDecimal totalEmissions(

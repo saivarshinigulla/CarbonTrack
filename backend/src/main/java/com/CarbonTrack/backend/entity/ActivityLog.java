@@ -129,4 +129,33 @@ public class ActivityLog {
     public String getSpendCurrency() { return spendCurrency; }
     public BigDecimal getFlightDistanceKm() { return flightDistanceKm; }
     public LocalDateTime getCreatedAt() { return createdAt; }
+
+    public void updateDetails(
+            String category,
+            String activityType,
+            BigDecimal quantity,
+            String unit,
+            BigDecimal co2eKg,
+            LocalDate logDate,
+            String energySource,
+            String mealType,
+            BigDecimal servings,
+            String productCategory,
+            BigDecimal spendAmount,
+            String spendCurrency,
+            BigDecimal flightDistanceKm) {
+        this.category = category;
+        this.activityType = activityType;
+        this.quantity = quantity;
+        this.unit = unit;
+        this.co2eKg = co2eKg;
+        this.logDate = logDate;
+        this.energySource = energySource;
+        this.mealType = mealType;
+        this.servings = servings;
+        this.productCategory = productCategory;
+        this.spendAmount = spendAmount;
+        this.spendCurrency = spendCurrency;
+        this.flightDistanceKm = flightDistanceKm;
+    }
 }

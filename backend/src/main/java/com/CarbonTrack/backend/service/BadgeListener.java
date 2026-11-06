@@ -5,7 +5,6 @@ import com.CarbonTrack.backend.dto.GoalProgressResponse;
 import com.CarbonTrack.backend.dto.GoalResponse;
 import com.CarbonTrack.backend.entity.Badge;
 import com.CarbonTrack.backend.entity.User;
-import com.CarbonTrack.backend.entity.UserBadge;
 import com.CarbonTrack.backend.event.ActivityLoggedEvent;
 import com.CarbonTrack.backend.event.GoalAchievedEvent;
 import com.CarbonTrack.backend.repository.ActivityLogRepository;
@@ -122,19 +121,19 @@ public class BadgeListener {
             BigDecimal baseline = progress.baselineFootprintKg();
             BigDecimal current = progress.currentFootprintKg();
             Integer elapsedDays = progress.elapsedDays();
-            Integer periodDays = progress.periodDays();
+            Integer baselinePeriodDays = progress.baselinePeriodDays();
 
             if (baseline == null || current == null
-                    || elapsedDays == null || periodDays == null
+                    || elapsedDays == null || baselinePeriodDays == null
                     || baseline.compareTo(BigDecimal.ZERO) <= 0
-                    || elapsedDays <= 0 || periodDays <= 0) {
+                    || elapsedDays <= 0 || baselinePeriodDays <= 0) {
                 continue;
             }
 
             // Compare equivalent elapsed periods.
             BigDecimal baselineToDate = baseline
                     .multiply(BigDecimal.valueOf(elapsedDays))
-                    .divide(BigDecimal.valueOf(periodDays),
+                    .divide(BigDecimal.valueOf(baselinePeriodDays),
                             8, RoundingMode.HALF_UP);
 
             // Actual CO2e reduction in kilograms.
@@ -172,17 +171,6 @@ public class BadgeListener {
 
         if (badge == null) return;
 
-        if (userBadgeRepository.existsByUserIdAndBadgeId(
-                userId, badge.getId())) {
-            return;
-        }
-
-        userBadgeRepository.save(
-                new UserBadge(
-                        userRepository.getReferenceById(userId),
-                        badge,
-                        LocalDateTime.now()
-                )
-        );
+        userBadgeRepository.insertIfAbsent(userId, badge.getId());
     }
 }

@@ -38,6 +38,18 @@ public class Goal {
     @Column(name = "status", nullable = false, length = 30)
     private String status;
 
+    @Column(name = "baseline_start_date")
+    private LocalDate baselineStartDate;
+
+    @Column(name = "baseline_end_date")
+    private LocalDate baselineEndDate;
+
+    @Column(name = "baseline_period_days")
+    private Integer baselinePeriodDays;
+
+    @Column(name = "baseline_footprint_kg", precision = 12, scale = 4)
+    private BigDecimal baselineFootprintKg;
+
     protected Goal() {
         // Required by JPA
     }
@@ -79,6 +91,22 @@ public class Goal {
         return status;
     }
 
+    public LocalDate getBaselineStartDate() {
+        return baselineStartDate;
+    }
+
+    public LocalDate getBaselineEndDate() {
+        return baselineEndDate;
+    }
+
+    public Integer getBaselinePeriodDays() {
+        return baselinePeriodDays;
+    }
+
+    public BigDecimal getBaselineFootprintKg() {
+        return baselineFootprintKg;
+    }
+
     public void setTargetReductionPct(BigDecimal targetReductionPct) {
         this.targetReductionPct = targetReductionPct;
     }
@@ -93,5 +121,21 @@ public class Goal {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public void setBaselineStartDate(LocalDate baselineStartDate) {
+        this.baselineStartDate = baselineStartDate;
+    }
+
+    public void setBaselineEndDate(LocalDate baselineEndDate) {
+        this.baselineEndDate = baselineEndDate;
+    }
+
+    public void setBaselinePeriodDays(Integer baselinePeriodDays) {
+        this.baselinePeriodDays = baselinePeriodDays;
+    }
+
+    public void setBaselineFootprintKg(BigDecimal baselineFootprintKg) {
+        this.baselineFootprintKg = baselineFootprintKg;
     }
 }

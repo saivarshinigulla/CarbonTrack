@@ -5,6 +5,7 @@ import com.CarbonTrack.backend.dto.GoalRequest;
 import com.CarbonTrack.backend.entity.ActivityLog;
 import com.CarbonTrack.backend.entity.Goal;
 import com.CarbonTrack.backend.entity.User;
+import com.CarbonTrack.backend.event.GoalAchievedEvent;
 import com.CarbonTrack.backend.repository.ActivityLogRepository;
 import com.CarbonTrack.backend.repository.GoalRepository;
 import com.CarbonTrack.backend.repository.UserRepository;
@@ -54,6 +55,10 @@ class GoalServiceTest {
 
     @Test
     void createsGoalForAuthenticatedUser() {
+        LocalDate start = LocalDate.now();
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, start.minusDays(30), start.minusDays(1)))
+                .thenReturn(List.of(activity(start.minusDays(1), "90.0000")));
         when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> {
             Goal saved = invocation.getArgument(0);
             ReflectionTestUtils.setField(saved, "id", 12L);
@@ -61,7 +66,7 @@ class GoalServiceTest {
         });
 
         var result = service.createGoal(
-                "sanket", request("15", 30, LocalDate.now()));
+                "sanket", request("15", 30, start));
 
         assertEquals(12L, result.id());
         assertEquals(new BigDecimal("15"), result.targetReductionPct());
@@ -156,6 +161,9 @@ class GoalServiceTest {
 
         when(goalRepository.findByIdAndUserId(22L, 7L))
                 .thenReturn(Optional.of(goal));
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, start.minusDays(44), start))
+                .thenReturn(List.of(activity(start.minusDays(1), "80.0000")));
         when(goalRepository.save(any(Goal.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -224,6 +232,8 @@ class GoalServiceTest {
         assertEquals(new BigDecimal("80.0000"), progress.targetFootprintKg());
         assertEquals(new BigDecimal("2.0000"), progress.currentFootprintKg());
         assertEquals(new BigDecimal("60.0000"), progress.projectedFootprintKg());
+        assertEquals(new BigDecimal("40.00"), progress.currentReductionPct());
+        assertEquals(new BigDecimal("200.00"), progress.goalCompletionPct());
         assertEquals(Boolean.TRUE, progress.onTrack());
         assertTrue(progress.alerts().stream()
                 .anyMatch(a -> a.startsWith("ON_TRACK")));
@@ -271,10 +281,15 @@ class GoalServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         var progress = service.getProgress("sanket", 35L);
+        var repeatedProgress = service.getProgress("sanket", 35L);
 
         assertEquals("ACHIEVED", progress.status());
+        assertEquals("ACHIEVED", repeatedProgress.status());
+        assertEquals(0, progress.daysRemaining());
         assertEquals("ACHIEVED", goal.getStatus());
-        verify(goalRepository).save(goal);
+        verify(goalRepository, times(2)).save(goal);
+        verify(eventPublisher, times(1))
+                .publishEvent(any(GoalAchievedEvent.class));
     }
 
     @Test
@@ -323,11 +338,163 @@ class GoalServiceTest {
 
         var progress = service.getProgress("sanket", 37L);
 
-        assertEquals(new BigDecimal("0.0000"), progress.baselineFootprintKg());
+        assertNull(progress.baselineFootprintKg());
         assertNull(progress.projectedFootprintKg());
+        assertNull(progress.currentReductionPct());
+        assertNull(progress.goalCompletionPct());
         assertNull(progress.onTrack());
         assertTrue(progress.alerts().stream()
                 .anyMatch(a -> a.startsWith("BASELINE_UNAVAILABLE")));
+    }
+
+    @Test
+    void startsNewGoalInPendingSevenDayBaselineWhenNoHistoryExists() {
+        LocalDate today = LocalDate.now();
+        Goal[] savedGoal = new Goal[1];
+        when(goalRepository.save(any(Goal.class))).thenAnswer(invocation -> {
+            savedGoal[0] = invocation.getArgument(0);
+            ReflectionTestUtils.setField(savedGoal[0], "id", 41L);
+            return savedGoal[0];
+        });
+
+        var created = service.createGoal(
+                "sanket", request("20", 30, today));
+
+        assertEquals("BASELINE_PENDING", created.status());
+        assertEquals(today.plusDays(7), created.startDate());
+        assertEquals(today, savedGoal[0].getBaselineStartDate());
+        assertEquals(today.plusDays(6), savedGoal[0].getBaselineEndDate());
+        when(goalRepository.findByIdAndUserId(41L, 7L))
+                .thenReturn(Optional.of(savedGoal[0]));
+
+        var progress = service.getProgress("sanket", 41L);
+
+        assertEquals("BASELINE_PENDING", progress.status());
+        assertNull(progress.baselineFootprintKg());
+        assertNull(progress.targetFootprintKg());
+        assertNull(progress.currentReductionPct());
+        assertNull(progress.onTrack());
+    }
+
+    @Test
+    void activatesGoalAfterACompletedMeasurableBaseline() {
+        LocalDate today = LocalDate.now();
+        Goal goal = goal(42L, "20", 30, today.minusDays(1), "BASELINE_PENDING");
+        goal.setBaselineStartDate(today.minusDays(8));
+        goal.setBaselineEndDate(today.minusDays(2));
+        goal.setBaselinePeriodDays(7);
+        when(goalRepository.findByIdAndUserId(42L, 7L))
+                .thenReturn(Optional.of(goal));
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, today.minusDays(8), today.minusDays(2)))
+                .thenReturn(List.of(activity(today.minusDays(2), "70.0000")));
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, today.minusDays(1), today))
+                .thenReturn(List.of(activity(today, "1.0000")));
+
+        var progress = service.getProgress("sanket", 42L);
+
+        assertEquals("ACTIVE", progress.status());
+        assertEquals(today.minusDays(1), progress.startDate());
+        assertEquals(new BigDecimal("70.0000"), progress.baselineFootprintKg());
+        assertEquals(7, progress.baselinePeriodDays());
+        assertNotNull(progress.targetFootprintKg());
+        assertNotNull(progress.currentReductionPct());
+    }
+
+    @Test
+    void zeroBaselineWindowRemainsPendingAndDoesNotInventProgress() {
+        LocalDate today = LocalDate.now();
+        Goal goal = goal(43L, "20", 30, today.minusDays(1), "BASELINE_PENDING");
+        goal.setBaselineStartDate(today.minusDays(8));
+        goal.setBaselineEndDate(today.minusDays(2));
+        goal.setBaselinePeriodDays(7);
+        when(goalRepository.findByIdAndUserId(43L, 7L))
+                .thenReturn(Optional.of(goal));
+        when(goalRepository.save(goal)).thenReturn(goal);
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, today.minusDays(8), today.minusDays(2)))
+                .thenReturn(List.of());
+
+        var progress = service.getProgress("sanket", 43L);
+
+        assertEquals("BASELINE_PENDING", progress.status());
+        assertEquals(today, progress.baselineStartDate());
+        assertEquals(today.plusDays(6), progress.baselineEndDate());
+        assertNull(progress.baselineFootprintKg());
+        assertNull(progress.currentReductionPct());
+        assertNull(progress.onTrack());
+        assertTrue(progress.alerts().stream()
+                .anyMatch(alert -> alert.startsWith("BASELINE_PENDING")));
+    }
+
+    @Test
+    void missingCurrentActivitiesDoNotAppearAsFullReduction() {
+        LocalDate today = LocalDate.now();
+        Goal goal = goal(44L, "20", 30, today, "ACTIVE");
+        goal.setBaselineStartDate(today.minusDays(30));
+        goal.setBaselineEndDate(today.minusDays(1));
+        goal.setBaselinePeriodDays(30);
+        goal.setBaselineFootprintKg(new BigDecimal("100.0000"));
+        when(goalRepository.findByIdAndUserId(44L, 7L))
+                .thenReturn(Optional.of(goal));
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, today, today))
+                .thenReturn(List.of());
+
+        var progress = service.getProgress("sanket", 44L);
+
+        assertNull(progress.currentFootprintKg());
+        assertNull(progress.currentReductionPct());
+        assertNull(progress.projectedFootprintKg());
+        assertNull(progress.onTrack());
+    }
+
+    @Test
+    void increasingEmissionsProduceNegativeReductionAndAtRiskProjection() {
+        LocalDate today = LocalDate.now();
+        LocalDate start = today.minusDays(9);
+        Goal goal = goal(45L, "20", 30, start, "ACTIVE");
+        when(goalRepository.findByIdAndUserId(45L, 7L))
+                .thenReturn(Optional.of(goal));
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, start.minusDays(30), start.minusDays(1)))
+                .thenReturn(List.of(activity(start.minusDays(1), "100.0000")));
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, start, today))
+                .thenReturn(List.of(activity(today, "40.0000")));
+
+        var progress = service.getProgress("sanket", 45L);
+
+        assertEquals(new BigDecimal("-20.00"), progress.currentReductionPct());
+        assertEquals(new BigDecimal("-100.00"), progress.goalCompletionPct());
+        assertEquals(new BigDecimal("120.0000"), progress.projectedFootprintKg());
+        assertEquals(Boolean.FALSE, progress.onTrack());
+    }
+
+    @Test
+    void zeroEmissionWalkingAndCyclingRemainMeasuredAgainstAValidBaseline() {
+        LocalDate today = LocalDate.now();
+        Goal goal = goal(46L, "20", 30, today, "ACTIVE");
+        goal.setBaselineStartDate(today.minusDays(30));
+        goal.setBaselineEndDate(today.minusDays(1));
+        goal.setBaselinePeriodDays(30);
+        goal.setBaselineFootprintKg(new BigDecimal("100.0000"));
+        when(goalRepository.findByIdAndUserId(46L, 7L))
+                .thenReturn(Optional.of(goal));
+        when(activityLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateDesc(
+                7L, today, today))
+                .thenReturn(List.of(
+                        activity(today, "walking", "0.0000"),
+                        activity(today, "cycling", "0.0000")));
+
+        var progress = service.getProgress("sanket", 46L);
+
+        assertEquals(new BigDecimal("0.0000"), progress.currentFootprintKg());
+        assertEquals(new BigDecimal("100.00"), progress.currentReductionPct());
+        assertEquals(new BigDecimal("500.00"), progress.goalCompletionPct());
+        assertEquals(new BigDecimal("0.0000"), progress.projectedFootprintKg());
+        assertEquals(Boolean.TRUE, progress.onTrack());
     }
 
     private GoalRequest request(String target, int days, LocalDate start) {
@@ -343,10 +510,15 @@ class GoalServiceTest {
     }
 
     private ActivityLog activity(LocalDate date, String emissions) {
+        return activity(date, "car_travel", emissions);
+    }
+
+    private ActivityLog activity(
+            LocalDate date, String activityType, String emissions) {
         return new ActivityLog(
                 user,
                 "transport",
-                "car_travel",
+                activityType,
                 BigDecimal.ONE,
                 "km",
                 new BigDecimal(emissions),

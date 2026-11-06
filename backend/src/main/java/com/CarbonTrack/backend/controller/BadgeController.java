@@ -1,6 +1,8 @@
 package com.CarbonTrack.backend.controller;
 
 import com.CarbonTrack.backend.dto.UserBadgeResponse;
+import com.CarbonTrack.backend.dto.BadgeCatalogueResponse;
+import com.CarbonTrack.backend.repository.BadgeRepository;
 import com.CarbonTrack.backend.entity.User;
 import com.CarbonTrack.backend.repository.UserBadgeRepository;
 import com.CarbonTrack.backend.repository.UserRepository;
@@ -18,12 +20,23 @@ public class BadgeController {
 
     private final UserBadgeRepository userBadgeRepository;
     private final UserRepository userRepository;
+    private final BadgeRepository badgeRepository;
 
     public BadgeController(
             UserBadgeRepository userBadgeRepository,
-            UserRepository userRepository) {
+            UserRepository userRepository,
+            BadgeRepository badgeRepository) {
         this.userBadgeRepository = userBadgeRepository;
         this.userRepository = userRepository;
+        this.badgeRepository = badgeRepository;
+    }
+
+    @GetMapping
+    public List<BadgeCatalogueResponse> catalogue() {
+        return badgeRepository.findAllByOrderByIdAsc()
+                .stream()
+                .map(BadgeCatalogueResponse::from)
+                .toList();
     }
 
     @GetMapping("/me")

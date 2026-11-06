@@ -7,10 +7,12 @@ import com.CarbonTrack.backend.entity.User;
 import com.CarbonTrack.backend.repository.ActivityLogRepository;
 import com.CarbonTrack.backend.repository.UserRepository;
 import com.CarbonTrack.backend.event.ActivityLoggedEvent;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -40,20 +42,102 @@ public class ActivityLogService {
     public ActivityLog createActivity(
             String username, CreateActivityRequest request) {
 
+        ActivityValues values = calculateValues(request);
+
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Authenticated user not found"));
+
+        ActivityLog activityLog = new ActivityLog(
+                user,
+                values.category(),
+                values.activityType(),
+                values.quantity(),
+                values.unit(),
+                values.emissionsKg(),
+                values.logDate(),
+                values.energySource(),
+                values.mealType(),
+                values.servings(),
+                values.productCategory(),
+                values.spendAmount(),
+                values.spendCurrency(),
+                values.flightDistanceKm()
+        );
+
+        ActivityLog saved = activityLogRepository.save(activityLog);
+        eventPublisher.publishEvent(new ActivityLoggedEvent(user.getId(), saved.getLogDate()));
+        return saved;
+    }
+
+    @Transactional
+    @CacheEvict(cacheNames = "footprintAnalytics", allEntries = true)
+    public ActivityLog updateActivity(
+            String username, Long activityId, CreateActivityRequest request) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Authenticated user not found"));
+        ActivityLog activity = activityLogRepository
+                .findByIdAndUserId(activityId, user.getId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Activity was not found"));
+        ActivityValues values = calculateValues(request);
+
+        activity.updateDetails(
+                values.category(),
+                values.activityType(),
+                values.quantity(),
+                values.unit(),
+                values.emissionsKg(),
+                values.logDate(),
+                values.energySource(),
+                values.mealType(),
+                values.servings(),
+                values.productCategory(),
+                values.spendAmount(),
+                values.spendCurrency(),
+                values.flightDistanceKm()
+        );
+
+        ActivityLog saved = activityLogRepository.save(activity);
+        eventPublisher.publishEvent(
+                new ActivityLoggedEvent(user.getId(), saved.getLogDate()));
+        return saved;
+    }
+
+    @Transactional
+    @CacheEvict(cacheNames = "footprintAnalytics", allEntries = true)
+    public void deleteActivity(String username, Long activityId) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Authenticated user not found"));
+        ActivityLog activity = activityLogRepository
+                .findByIdAndUserId(activityId, user.getId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Activity was not found"));
+        activityLogRepository.delete(activity);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ActivityLog> getActivitiesForUser(String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Authenticated user not found"));
+
+        return activityLogRepository.findByUserIdOrderByLogDateDesc(user.getId());
+    }
+
+    private ActivityValues calculateValues(CreateActivityRequest request) {
         String category = request.category().toLowerCase(Locale.ROOT);
         String activityType = request.activityType().toLowerCase(Locale.ROOT);
 
         validateCategory(category, activityType);
         validateCategoryDetails(category, activityType, request);
 
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Authenticated user not found"));
-
         BigDecimal quantity = request.quantity();
         String unit = request.unit();
-
-        if ("transport".equals(category) && "flight_travel".equals(activityType)) {
+        if ("transport".equals(category)
+                && "flight_travel".equals(activityType)) {
             if (request.flightDistanceKm() == null) {
                 throw new IllegalArgumentException(
                         "Flight distance is required for flight travel");
@@ -62,16 +146,15 @@ public class ActivityLogService {
             unit = "passenger-km";
         }
 
-        BigDecimal co2eKg = emissionCalculationService.calculateEmissions(
+        BigDecimal emissionsKg = emissionCalculationService.calculateEmissions(
                 activityType, unit, quantity);
 
-        ActivityLog activityLog = new ActivityLog(
-                user,
+        return new ActivityValues(
                 category,
                 activityType,
                 quantity,
                 unit,
-                co2eKg,
+                emissionsKg,
                 request.logDate(),
                 request.energySource(),
                 request.mealType(),
@@ -82,19 +165,6 @@ public class ActivityLogService {
                         ? null : request.spendCurrency().toUpperCase(Locale.ROOT),
                 request.flightDistanceKm()
         );
-
-        ActivityLog saved = activityLogRepository.save(activityLog);
-        eventPublisher.publishEvent(new ActivityLoggedEvent(user.getId(), saved.getLogDate()));
-        return saved;
-    }
-
-    @Transactional(readOnly = true)
-    public List<ActivityLog> getActivitiesForUser(String username) {
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Authenticated user not found"));
-
-        return activityLogRepository.findByUserIdOrderByLogDateDesc(user.getId());
     }
 
     private void validateCategoryDetails(
@@ -154,8 +224,15 @@ public class ActivityLogService {
     private void validateCategory(String category, String activityType) {
         boolean valid = switch (category) {
             case "transport" ->
-                    List.of("car_travel", "motorcycle_travel", "bus_travel",
-                            "train_travel", "flight_travel").contains(activityType);
+                    List.of(
+                            "car_travel",
+                            "motorcycle_travel",
+                            "bus_travel",
+                            "train_travel",
+                            "flight_travel",
+                            "walking",
+                            "cycling"
+                    ).contains(activityType);
             case "electricity" -> "grid_electricity".equals(activityType);
             case "food" ->
                     List.of("beef", "chicken", "plant_based_food").contains(activityType);
@@ -189,5 +266,21 @@ public class ActivityLogService {
             throw new IllegalArgumentException(
                     field + " is not applicable to this activity category");
         }
+    }
+
+    private record ActivityValues(
+            String category,
+            String activityType,
+            BigDecimal quantity,
+            String unit,
+            BigDecimal emissionsKg,
+            java.time.LocalDate logDate,
+            String energySource,
+            String mealType,
+            BigDecimal servings,
+            String productCategory,
+            BigDecimal spendAmount,
+            String spendCurrency,
+            BigDecimal flightDistanceKm) {
     }
 }

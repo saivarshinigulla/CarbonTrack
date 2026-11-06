@@ -17,8 +17,12 @@ public record GoalProgressResponse(
         BigDecimal currentFootprintKg,
         BigDecimal projectedFootprintKg,
         BigDecimal currentReductionPct,
+        BigDecimal goalCompletionPct,
         Integer elapsedDays,
         Integer daysRemaining,
         Boolean onTrack,
-        List<String> alerts
+        List<String> alerts,
+        Integer baselinePeriodDays,
+        LocalDate baselineStartDate,
+        LocalDate baselineEndDate
 ) {}

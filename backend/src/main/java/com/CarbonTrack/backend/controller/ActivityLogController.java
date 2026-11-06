@@ -44,4 +44,22 @@ public class ActivityLogController {
                 .map(ActivityResponse::from)
                 .toList();
     }
+
+    @PutMapping("/{activityId}")
+    public ActivityResponse updateActivity(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long activityId,
+            @Valid @RequestBody CreateActivityRequest request) {
+        return ActivityResponse.from(
+                activityLogService.updateActivity(
+                        jwt.getSubject(), activityId, request));
+    }
+
+    @DeleteMapping("/{activityId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteActivity(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long activityId) {
+        activityLogService.deleteActivity(jwt.getSubject(), activityId);
+    }
 }
