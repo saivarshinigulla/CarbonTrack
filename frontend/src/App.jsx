@@ -1,11 +1,11 @@
-import React, { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, ArrowLeft, ArrowRight, BarChart3, Check, CheckCircle2, ChevronDown,
   CircleHelp, Cloud, Eye, EyeOff, Globe2, Leaf, LockKeyhole, LogOut,
   Mail, Menu, ShieldCheck, Sparkles, Sprout, TrendingDown, TrendingUp,
   UserRound, X, Target, Award, Settings, Plus, Trash2, Pencil, RefreshCw,
   CalendarDays, Users, Building2, Download, Zap, CarFront, Utensils, ShoppingBag,
-  AlertCircle, FileText, Compass, Trophy
+  AlertCircle, FileText, Compass, Trophy, Flame, MessageCircle, Send
 } from "lucide-react";
 
 import AppLayout from "./components/layout/AppLayout.jsx";
@@ -1550,6 +1550,12 @@ function GoalWidget({ goals, setPage }) {
   const [progress, setProgress] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [ringSweep, setRingSweep] = useState(0);
+
+  useEffect(() => {
+    const t = setTimeout(() => setRingSweep(1), 80);
+    return () => clearTimeout(t);
+  }, [progress]);
 
   useEffect(() => {
     const active = (goals || []).find((g) => g.status === "ACTIVE") || (goals || [])[0];
@@ -1607,6 +1613,24 @@ function GoalWidget({ goals, setPage }) {
   }
 
   if (progress.status === "BASELINE_PENDING") {
+    const parseLocalDate = (value) => {
+      if (!value) return null;
+      const parts = String(value).slice(0, 10).split("-").map(Number);
+      return parts.length === 3 && parts.every((n) => Number.isFinite(n))
+        ? new Date(parts[0], parts[1] - 1, parts[2])
+        : null;
+    };
+    const baseStart = parseLocalDate(progress.baselineStartDate || activeGoal.startDate);
+    const baseEnd = parseLocalDate(progress.baselineEndDate);
+    const todayDate = parseLocalDate(todayLocal());
+    let baselineDay = null;
+    let baselineTotalDays = null;
+    let baselinePct = 0;
+    if (baseStart && baseEnd && todayDate) {
+      baselineTotalDays = Math.max(1, Math.round((baseEnd - baseStart) / 86400000) + 1);
+      baselineDay = Math.min(baselineTotalDays, Math.max(1, Math.floor((todayDate - baseStart) / 86400000) + 1));
+      baselinePct = Math.round((baselineDay / baselineTotalDays) * 100);
+    }
     return (
       <div className="goal-widget-container goal-baseline-pending">
         <div className="panel-heading">
@@ -1619,6 +1643,22 @@ function GoalWidget({ goals, setPage }) {
         <p className="goal-baseline-dates">
           {progress.baselineStartDate || activeGoal.startDate} – {progress.baselineEndDate || "7-day period"}
         </p>
+        {baselineDay !== null && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
+              <span>Baseline progress: <b>Day {baselineDay} of {baselineTotalDays}</b></span>
+              <span>{baselinePct}%</span>
+            </div>
+            <div className="goal-progress-track" role="progressbar"
+              aria-label="Baseline collection progress" aria-valuemin={0} aria-valuemax={100}
+              aria-valuenow={baselinePct}>
+              <span style={{ width: `${baselinePct}%`, transition: "width 0.8s ease" }} />
+            </div>
+            <p className="goal-budget-note">
+              Log your normal activities every day — a complete week makes your reduction target accurate.
+            </p>
+          </div>
+        )}
         <div className="goal-widget-metrics">
           <div className="goal-metric-pill"><small>Baseline emissions</small><b>Collecting</b></div>
           <div className="goal-metric-pill"><small>Current emissions</small><b>—</b></div>
@@ -1626,6 +1666,7 @@ function GoalWidget({ goals, setPage }) {
           <div className="goal-metric-pill"><small>Actual reduction</small><b>—</b></div>
           <div className="goal-metric-pill"><small>Goal completion</small><b>—</b></div>
           <div className="goal-metric-pill"><small>Days remaining</small><b>Not started</b></div>
+          <div className="goal-metric-pill"><small>Daily reduction required</small><b>Available after baseline</b></div>
         </div>
       </div>
     );
@@ -1640,6 +1681,10 @@ function GoalWidget({ goals, setPage }) {
   const completionPct = goalCompletionPercentage(progress);
   const targetPct = number(progress.targetReductionPct);
   const remainingBudget = target == null || current == null ? null : Math.max(0, target - current);
+  const dailyReductionRequired =
+    projected == null || target == null || remainingDays <= 0
+      ? null
+      : Math.max(0, projected - target) / remainingDays;
   const completionWidth = completionPct == null
     ? 0
     : Math.min(100, Math.max(0, completionPct));
@@ -1684,25 +1729,52 @@ function GoalWidget({ goals, setPage }) {
           <small>Days Remaining</small>
           <b>{progress.status === "BASELINE_PENDING" ? "Not started" : remainingDays}</b>
         </div>
+        <div className="goal-metric-pill">
+          <small>Daily Reduction Required</small>
+          <b style={{ color: dailyReductionRequired != null && dailyReductionRequired > 0 ? "#b45309" : "#21613e" }}>
+            {dailyReductionRequired == null ? "—" : formatNumber(dailyReductionRequired)} <small>{dailyReductionRequired == null ? "" : "kg CO₂e / day"}</small>
+          </b>
+        </div>
       </div>
 
-      <div style={{ marginTop: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
-          <span>Goal completion: {completionPct == null ? "—" : `${completionPct.toFixed(1)}% of target`}</span>
-          <span>Projected Footprint: <b>{projected == null ? "—" : `${formatNumber(projected)} kg CO₂e`}</b></span>
+      <div style={{ marginTop: 10, display: "flex", gap: 16, alignItems: "center" }}>
+        <svg width="76" height="76" viewBox="0 0 76 76" role="img" style={{ flexShrink: 0 }}
+          aria-label={`Goal completion ${completionPct == null ? "not available" : `${completionPct.toFixed(0)} percent`}`}>
+          <circle cx="38" cy="38" r="30" fill="none" stroke="#e6eee5" strokeWidth="8" />
+          <circle cx="38" cy="38" r="30" fill="none"
+            stroke={progress.onTrack === false ? "#d97706" : "#21613e"}
+            strokeWidth="8" strokeLinecap="round"
+            strokeDasharray={2 * Math.PI * 30}
+            strokeDashoffset={(2 * Math.PI * 30) * (1 - (completionWidth * ringSweep) / 100)}
+            transform="rotate(-90 38 38)"
+            style={{ transition: "stroke-dashoffset 0.9s ease" }}
+          />
+          <text x="38" y="37" textAnchor="middle" fontSize="15" fontWeight="700" fill="#174631">
+            {completionPct == null ? "—" : `${completionPct.toFixed(0)}%`}
+          </text>
+          <text x="38" y="51" textAnchor="middle" fontSize="8.5" fill="#718177">complete</text>
+        </svg>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
+            <span>Goal completion: {completionPct == null ? "—" : `${completionPct.toFixed(1)}% of target`}</span>
+            <span>Projected Footprint: <b>{projected == null ? "—" : `${formatNumber(projected)} kg CO₂e`}</b></span>
+          </div>
+          <div className="goal-progress-track" role="progressbar"
+            aria-label="Goal completion" aria-valuemin={0} aria-valuemax={100}
+            aria-valuenow={completionWidth}>
+            <span className={progress.onTrack === false ? "goal-progress-at-risk" : ""}
+              style={{ width: `${completionWidth}%` }} />
+          </div>
+          <p className="goal-budget-note">
+            {remainingBudget == null
+              ? "Remaining emissions budget: —"
+              : `Remaining emissions budget: ${formatNumber(remainingBudget)} kg CO₂e`}
+            {" · "}{remainingDays} days remaining
+            {dailyReductionRequired != null && (dailyReductionRequired > 0
+              ? ` · Cut about ${formatNumber(dailyReductionRequired)} kg CO₂e per day to finish on target`
+              : " · On pace — no daily reduction needed")}
+          </p>
         </div>
-        <div className="goal-progress-track" role="progressbar"
-          aria-label="Goal completion" aria-valuemin={0} aria-valuemax={100}
-          aria-valuenow={completionWidth}>
-          <span className={progress.onTrack === false ? "goal-progress-at-risk" : ""}
-            style={{ width: `${completionWidth}%` }} />
-        </div>
-        <p className="goal-budget-note">
-          {remainingBudget == null
-            ? "Remaining emissions budget: —"
-            : `Remaining emissions budget: ${formatNumber(remainingBudget)} kg CO₂e`}
-          {" · "}{remainingDays} days remaining
-        </p>
       </div>
 
       {progress.alerts && progress.alerts.length > 0 && (
@@ -1772,29 +1844,45 @@ function buildMonthlyCumulativeData(activities, goalTarget) {
     });
   }
 
+  const keyFor = (dateObj) =>
+    `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}`;
+
+  // Recent trend: average daily emissions over the last 7 days (missing days count as 0)
+  let last7Total = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    last7Total += dateMap[keyFor(d)] || 0;
+  }
+  const recentDailyAverage = last7Total / 7;
+
   const dailyBudget = Number.isFinite(Number(goalTarget)) && Number(goalTarget) > 0
     ? Number(goalTarget) / daysInMonth
     : null;
 
   let cumulativeActual = 0;
+  let projectedBase = null;
   const result = [];
 
   for (let d = 1; d <= daysInMonth; d++) {
     const dateObj = new Date(today.getFullYear(), today.getMonth(), d);
-    const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const dateKey = keyFor(dateObj);
     const targetCeiling = dailyBudget === null ? null : Number((dailyBudget * d).toFixed(2));
 
     if (d <= currentDay) {
       const dailyVal = dateMap[dateKey] || 0;
       cumulativeActual += dailyVal;
+      if (d === currentDay) projectedBase = cumulativeActual;
       result.push({
         day: `${d}`,
         "Cumulative Actual": Number(cumulativeActual.toFixed(2)),
+        ...(d === currentDay ? { "Projected Cumulative": Number(cumulativeActual.toFixed(2)) } : {}),
         ...(targetCeiling !== null ? { "Target Ceiling": targetCeiling } : {}),
       });
     } else {
       result.push({
         day: `${d}`,
+        ...(projectedBase !== null ? { "Projected Cumulative": Number((projectedBase + recentDailyAverage * (d - currentDay)).toFixed(2)) } : {}),
         ...(targetCeiling !== null ? { "Target Ceiling": targetCeiling } : {}),
       });
     }
@@ -1897,6 +1985,25 @@ function Dashboard({ user, setPage }) {
     return buildMonthlyCumulativeData(activities, monthlyTarget);
   }, [activities, monthlyTarget]);
 
+  const projectedMonthEnd = monthlyCumulativeData.length
+    ? monthlyCumulativeData[monthlyCumulativeData.length - 1]["Projected Cumulative"]
+    : null;
+
+  const assistantData = {
+    username: user?.username,
+    todayFootprint,
+    totalKg: total == null ? null : number(total),
+    period,
+    categories,
+    activities,
+    goals,
+    goalProgress: activeGoalProgress,
+    recommendations,
+    weeklyData,
+    projectedMonthEnd,
+    streak: computeLoggingStreak(activities),
+  };
+
   return (
     <main className="dashboard-page">
       <div className="dashboard-shell">
@@ -1936,6 +2043,10 @@ function Dashboard({ user, setPage }) {
         </div>
         </FadeContent>
 
+        <FadeContent className="dashboard-reveal" duration={0.45} once>
+          <WeekHighlights activities={activities} weeklyData={weeklyData} />
+        </FadeContent>
+
         {/* Goal Widget */}
         <FadeContent className="dashboard-reveal" duration={0.45} once>
           <GoalWidget goals={goals} setPage={setPage} />
@@ -1957,7 +2068,19 @@ function Dashboard({ user, setPage }) {
         </FadeContent>
 
         <FadeContent className="dashboard-reveal" duration={0.45} once>
+          <CategoryShareCard categories={categories} />
+        </FadeContent>
+
+        <FadeContent className="dashboard-reveal" duration={0.45} once>
+          <RotatingTipBanner recommendations={recommendations} />
+        </FadeContent>
+
+        <FadeContent className="dashboard-reveal" duration={0.45} once>
           <RecommendationsPanel recommendations={recommendations} error={recommendationError} />
+        </FadeContent>
+
+        <FadeContent className="dashboard-reveal" duration={0.45} once>
+          <ImpactEquivalentsCard totalKg={total == null ? null : number(total)} />
         </FadeContent>
 
         {/* Recent Activity Summary */}
@@ -1969,6 +2092,8 @@ function Dashboard({ user, setPage }) {
           setPage={setPage}
         />
         </FadeContent>
+
+        <AssistantChat data={assistantData} />
       </div>
     </main>
   );
@@ -2006,6 +2131,799 @@ function RecommendationsPanel({ recommendations, error }) {
         </div>
       )}
     </section>
+  );
+}
+
+function ImpactEquivalentsCard({ totalKg }) {
+  if (totalKg == null || !(totalKg > 0)) return null;
+  const trees = totalKg / 21;
+  const carKm = totalKg / 0.17;
+  return (
+    <section className="chart-card recommendations-panel">
+      <div className="chart-card-header">
+        <div>
+          <h3>Your impact in real life</h3>
+          <p>What this period's footprint means in everyday terms.</p>
+        </div>
+        <Sprout size={19} className="text-green-700" />
+      </div>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 200px", display: "flex", gap: 12, alignItems: "center", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 12, padding: "14px 16px" }}>
+          <Sprout size={26} style={{ color: "#21613e", flexShrink: 0 }} />
+          <div>
+            <b style={{ fontSize: 20, color: "#174631" }}>{formatNumber(trees)} trees</b>
+            <p style={{ margin: 0, fontSize: 12, color: "var(--muted)" }}>would need a full year to absorb this much CO₂</p>
+          </div>
+        </div>
+        <div style={{ flex: "1 1 200px", display: "flex", gap: 12, alignItems: "center", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: "14px 16px" }}>
+          <CarFront size={26} style={{ color: "#0284c7", flexShrink: 0 }} />
+          <div>
+            <b style={{ fontSize: 20, color: "#174631" }}>{formatNumber(Math.round(carKm))} km</b>
+            <p style={{ margin: 0, fontSize: 12, color: "var(--muted)" }}>of petrol-car driving produces the same emissions</p>
+          </div>
+        </div>
+      </div>
+      <p style={{ margin: "10px 0 0", fontSize: 11, color: "var(--muted)" }}>
+        Estimates: one tree absorbs ≈ 21 kg CO₂ per year · petrol car factor 0.17 kg CO₂e/km (from the CarbonTrack emission factors).
+      </p>
+    </section>
+  );
+}
+
+function computeLoggingStreak(activities) {
+  const days = new Set((activities || []).map((a) => a.logDate).filter(Boolean));
+  const keyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const cursor = new Date();
+  if (!days.has(keyOf(cursor))) cursor.setDate(cursor.getDate() - 1);
+  let streak = 0;
+  while (days.has(keyOf(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+function WeekHighlights({ activities, weeklyData }) {
+  if (!activities || activities.length === 0) return null;
+
+  const streak = computeLoggingStreak(activities);
+  const loggedDays = new Set(activities.map((a) => a.logDate).filter(Boolean));
+  const keyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  const today = new Date();
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const weekDots = dayNames.map((name, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return { name, active: loggedDays.has(keyOf(d)), isToday: keyOf(d) === keyOf(today) };
+  });
+
+  const currentWeek = (weeklyData || []).reduce((s, d) => s + number(d["Current Week"]), 0);
+  const previousWeek = (weeklyData || []).reduce((s, d) => s + number(d["Previous Week"]), 0);
+  const pctChange = previousWeek > 0 ? ((currentWeek - previousWeek) / previousWeek) * 100 : null;
+
+  return (
+    <section className="chart-card recommendations-panel">
+      <div className="chart-card-header">
+        <div>
+          <h3>Your week at a glance</h3>
+          <p>Logging habit and this week's footprint versus last week.</p>
+        </div>
+        <span className="panel-icon"><CalendarDays size={18} /></span>
+      </div>
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <Flame size={34} style={{ color: streak > 0 ? "#e8590c" : "#94a3b8" }} />
+          <div>
+            <b style={{ fontSize: 22, color: "#174631" }}>{streak} {streak === 1 ? "day" : "days"}</b>
+            <p style={{ margin: 0, fontSize: 12, color: "var(--muted)" }}>
+              logging streak{loggedDays.has(keyOf(today)) ? " — logged today, keep it going" : streak > 0 ? " — log today to keep it alive" : " — log today to start one"}
+            </p>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 7 }}>
+          {weekDots.map((d) => (
+            <span key={d.name} style={{ textAlign: "center", fontSize: 9, color: "var(--muted)" }}>
+              <span style={{
+                display: "block", width: 16, height: 16, borderRadius: "50%", margin: "0 auto 3px",
+                background: d.active ? "#409461" : "#ffffff",
+                border: d.isToday ? "2px solid #174631" : "2px solid #cfdccf",
+              }} />
+              {d.name}
+            </span>
+          ))}
+        </div>
+        <div style={{ marginLeft: "auto", textAlign: "right" }}>
+          <p style={{ margin: 0, fontSize: 12, color: "var(--muted)" }}>
+            This week <b style={{ color: "#174631", fontSize: 15 }}>{formatNumber(currentWeek)} kg</b>
+            {" · "}Last week <b style={{ color: "#174631", fontSize: 15 }}>{formatNumber(previousWeek)} kg</b>
+          </p>
+          {previousWeek === 0 && currentWeek > 0 ? (
+            <span className="pill-tag" style={{ background: "#fdf0d3", color: "#92600a", marginTop: 6, display: "inline-block" }}>
+              First active week — you're getting started
+            </span>
+          ) : pctChange != null && pctChange < 0 ? (
+            <span className="pill-tag" style={{ background: "#e4f2e7", color: "#21613e", marginTop: 6, display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <TrendingDown size={13} /> {Math.abs(pctChange).toFixed(0)}% lower than last week
+            </span>
+          ) : pctChange != null && pctChange > 0 ? (
+            <span className="pill-tag" style={{ background: "#ffe4e6", color: "#be123c", marginTop: 6, display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <TrendingUp size={13} /> {pctChange.toFixed(0)}% higher than last week
+            </span>
+          ) : pctChange === 0 ? (
+            <span className="pill-tag" style={{ marginTop: 6, display: "inline-block" }}>Same as last week</span>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const SHARE_COLORS = {
+  transport: "#0284c7",
+  electricity: "#eab308",
+  energy: "#eab308",
+  food: "#16a34a",
+  shopping: "#9333ea",
+  other: "#64748b",
+};
+
+function CategoryShareCard({ categories }) {
+  const [grown, setGrown] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setGrown(1), 80);
+    return () => clearTimeout(t);
+  }, [categories]);
+
+  const totalShare = (categories || []).reduce((s, c) => s + number(c.totalEmissionsKg), 0);
+  if (!categories || categories.length === 0 || totalShare <= 0) return null;
+
+  const sorted = [...categories]
+    .map((c) => ({ ...c, share: (number(c.totalEmissionsKg) / totalShare) * 100 }))
+    .sort((a, b) => b.share - a.share);
+  const top = sorted[0];
+
+  return (
+    <section className="chart-card recommendations-panel">
+      <div className="chart-card-header">
+        <div>
+          <h3>Where your footprint comes from</h3>
+          <p>Share of this period's emissions by category. Biggest source: <b>{pretty(top.category)}</b>.</p>
+        </div>
+        <span className="panel-icon"><BarChart3 size={18} /></span>
+      </div>
+      <div style={{ display: "flex", height: 26, borderRadius: 8, overflow: "hidden" }}>
+        {sorted.map((c) => (
+          <div key={c.category}
+            title={`${pretty(c.category)}: ${formatNumber(c.totalEmissionsKg)} kg CO₂e (${c.share.toFixed(0)}%)`}
+            style={{
+              width: `${c.share * grown}%`,
+              background: SHARE_COLORS[String(c.category).toLowerCase()] || "#409461",
+              transition: "width 1s ease",
+            }} />
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6, marginTop: 8, fontSize: 12 }}>
+        {sorted.map((c) => (
+          <span key={c.category}>
+            <b style={{ color: SHARE_COLORS[String(c.category).toLowerCase()] || "#409461" }}>{pretty(c.category)}</b>
+            {" · "}{formatNumber(c.totalEmissionsKg)} kg · {c.share.toFixed(0)}%
+          </span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RotatingTipBanner({ recommendations }) {
+  const tips = useMemo(() => {
+    const all = [];
+    (recommendations || []).forEach((item) => {
+      (item.recommendations || []).forEach((tip) => all.push({ tip, type: item.activityType }));
+    });
+    return all;
+  }, [recommendations]);
+
+  const [idx, setIdx] = useState(0);
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    if (tips.length <= 1) return undefined;
+    let swap;
+    const id = setInterval(() => {
+      setVisible(false);
+      swap = setTimeout(() => {
+        setIdx((i) => (i + 1) % tips.length);
+        setVisible(true);
+      }, 350);
+    }, 3400);
+    return () => { clearInterval(id); clearTimeout(swap); };
+  }, [tips.length]);
+
+  if (tips.length === 0) return null;
+  const currentIdx = Math.min(idx, tips.length - 1);
+  const current = tips[currentIdx];
+
+  return (
+    <section style={{
+      display: "flex", alignItems: "center", gap: 12,
+      padding: "13px 18px", borderRadius: 14, marginBottom: 24,
+      background: "#f0fdf4", border: "1px solid #bbf7d0",
+    }}>
+      <Sprout size={22} style={{ color: "#21613e", flexShrink: 0 }} />
+      <p style={{ margin: 0, fontSize: 13, opacity: visible ? 1 : 0, transition: "opacity 0.35s ease" }}>
+        <b>Tip for {pretty(current.type)}:</b> {current.tip}
+      </p>
+      {tips.length > 1 && (
+        <span style={{ marginLeft: "auto", display: "flex", gap: 5, flexShrink: 0 }}>
+          {tips.map((_, i) => (
+            <span key={i} style={{
+              width: 7, height: 7, borderRadius: "50%",
+              background: i === currentIdx ? "#21613e" : "#cfdccf",
+            }} />
+          ))}
+        </span>
+      )}
+    </section>
+  );
+}
+
+function renderRich(text) {
+  return String(text).split("\n").map((line, li) => (
+    <span key={li} style={{ display: "block" }}>
+      {line.split("**").map((part, pi) => (
+        pi % 2 === 1 ? <b key={pi}>{part}</b> : <span key={pi}>{part}</span>
+      ))}
+    </span>
+  ));
+}
+
+const ASSISTANT_LANGS = [
+  { id: "en", label: "English" },
+  { id: "hi", label: "हिन्दी" },
+  { id: "hinglish", label: "Hinglish" },
+];
+
+function AssistantChat({ data }) {
+  const [open, setOpen] = useState(false);
+  const [lang, setLang] = useState("en");
+  const [messages, setMessages] = useState([
+    {
+      from: "bot",
+      text: `Hello ${data.username || "there"}! I'm your CarbonTrack assistant. Ask me about your footprint, your goal, your streak, or tips to cut emissions — I answer from your live dashboard data. You can also switch my language from the menu above.`,
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [typing, setTyping] = useState(false);
+  const [badges, setBadges] = useState(null);
+  const tipIndexRef = useRef(0);
+  const timerRef = useRef(null);
+  const scrollRef = useRef(null);
+
+  const L = (en, hi, hinglish) => (lang === "hi" ? hi : lang === "hinglish" ? hinglish : en);
+
+  const [chipOffset, setChipOffset] = useState(0);
+
+  const CHIP_POOLS = {
+    en: ["Today's footprint?", "Biggest source?", "How is my goal?", "Give me a tip", "This week vs last?", "What's my streak?", "Month-end projection?", "My badges?", "Car emissions?", "Electricity emissions?", "Food emissions?", "Shopping emissions?", "How many activities?", "My highest day?", "Daily average?"],
+    hi: ["आज का फुटप्रिंट?", "सबसे बड़ा स्रोत?", "मेरा लक्ष्य कैसा है?", "एक सुझाव दो", "इस सप्ताह vs पिछला?", "मेरी स्ट्रीक कितनी है?", "महीने के अंत का अनुमान?", "मेरे बैज?", "कार का उत्सर्जन?", "बिजली का उत्सर्जन?", "भोजन का उत्सर्जन?", "खरीदारी का उत्सर्जन?", "कितनी गतिविधियाँ लॉग हैं?", "सबसे ज़्यादा वाला दिन?", "रोज़ का औसत?"],
+    hinglish: ["Aaj ka footprint?", "Sabse bada source?", "Goal ka haal?", "Ek tip do", "Is hafte vs pichhla?", "Mera streak kitna hai?", "Mahine ke end ka projection?", "Mere badges?", "Car ka emission?", "Bijli ka emission?", "Khana ka emission?", "Shopping ka emission?", "Kitni activities log hain?", "Sabse zyada wala din?", "Roz ka average?"],
+  };
+  const chipPool = CHIP_POOLS[lang] || CHIP_POOLS.en;
+  const chipStart = ((chipOffset % chipPool.length) + chipPool.length) % chipPool.length;
+  const visibleChips = [...chipPool.slice(chipStart), ...chipPool.slice(0, chipStart)].slice(0, 5);
+
+  function switchLang(next) {
+    setLang(next);
+    const note = next === "hi"
+      ? "भाषा हिन्दी हो गई है। अपने फुटप्रिंट, लक्ष्य या सुझावों के बारे में पूछिए।"
+      : next === "hinglish"
+        ? "Bhasha Hinglish ho gayi hai. Footprint, goal ya tips ke baare me kuch bhi pucho."
+        : "Language set to English. Ask me about your footprint, goal or tips.";
+    setMessages((m) => [...m, { from: "bot", text: note }]);
+  }
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, typing, open]);
+
+  useEffect(() => {
+    if (open && badges === null) {
+      getMyBadges()
+        .then((res) => setBadges(listOf(res, ["badges", "content"])))
+        .catch(() => setBadges([]));
+    }
+  }, [open, badges]);
+
+  useEffect(() => { setChipOffset(0); }, [lang]);
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  function allTips() {
+    const all = [];
+    (data.recommendations || []).forEach((item) => {
+      (item.recommendations || []).forEach((tip) => all.push({ tip, type: item.activityType }));
+    });
+    return all;
+  }
+
+  function topCategory() {
+    const cats = (data.categories || []).filter((c) => number(c.totalEmissionsKg) > 0);
+    if (!cats.length) return null;
+    return [...cats].sort((a, b) => number(b.totalEmissionsKg) - number(a.totalEmissionsKg))[0];
+  }
+
+  function categoryByKey(key) {
+    return (data.categories || []).find((c) => {
+      const k = String(c.category || "").toLowerCase();
+      return k === key || (key === "electricity" && k === "energy");
+    });
+  }
+
+  function goalAnswer() {
+    const p = data.goalProgress;
+    const active = (data.goals || []).find((g) => g.status === "ACTIVE") || (data.goals || [])[0];
+    if (!active) {
+      return L(
+        "You don't have a goal set yet. Create a reduction goal from the Goals page — then I can track your target and your daily reduction for you.",
+        "आपने अभी कोई लक्ष्य नहीं बनाया है। Goals पेज से कार्बन कमी का लक्ष्य बनाइए — फिर मैं आपका लक्ष्य और रोज़ की कटौती दोनों बता पाऊँगा।",
+        "Abhi tumhara koi goal set nahi hai. Goals page se ek reduction goal banao — phir main tumhe target aur daily reduction bhi batata rahunga."
+      );
+    }
+    if (!p) {
+      return L(
+        "Your goal is set, but its progress data hasn't loaded yet. Refresh the dashboard once and ask me again.",
+        "आपका लक्ष्य बना हुआ है, लेकिन उसकी प्रगति का डेटा अभी लोड नहीं हुआ है। डैशबोर्ड को एक बार रीफ़्रेश करके फिर पूछिए।",
+        "Tumhara goal set hai, lekin uska progress data abhi load nahi hua. Dashboard ko ek baar refresh karke phir pucho."
+      );
+    }
+    if (p.status === "BASELINE_PENDING") {
+      const parse = (v) => {
+        if (!v) return null;
+        const parts = String(v).slice(0, 10).split("-").map(Number);
+        return parts.length === 3 && parts.every((n) => Number.isFinite(n))
+          ? new Date(parts[0], parts[1] - 1, parts[2])
+          : null;
+      };
+      const s = parse(p.baselineStartDate || active.startDate);
+      const e = parse(p.baselineEndDate);
+      const t = parse(todayLocal());
+      let day = null;
+      let totalDays = null;
+      if (s && e && t) {
+        totalDays = Math.max(1, Math.round((e - s) / 86400000) + 1);
+        day = Math.min(totalDays, Math.max(1, Math.floor((t - s) / 86400000) + 1));
+      }
+      const dayText = day == null ? "" : L(
+        ` You are on **Day ${day} of ${totalDays}** of the baseline.`,
+        ` अभी बेसलाइन का **दिन ${day} / ${totalDays}** चल रहा है।`,
+        ` Abhi baseline ka **Day ${day} of ${totalDays}** chal raha hai.`
+      );
+      return L(
+        `Your goal is in the **baseline phase** (${p.baselineStartDate || active.startDate} – ${p.baselineEndDate || "7 days"}).${dayText} After the baseline, a ${active.targetReductionPct}% reduction target will be set — then I can also tell you your daily reduction. Keep logging your daily activities until then; a complete week makes the baseline accurate.`,
+        `आपका लक्ष्य अभी **बेसलाइन चरण** में है (${p.baselineStartDate || active.startDate} – ${p.baselineEndDate || "7 दिन"})।${dayText} बेसलाइन के बाद ${active.targetReductionPct}% कमी का लक्ष्य तय होगा — तब मैं आपकी रोज़ की कटौती भी बता पाऊँगा। तब तक रोज़ की गतिविधियाँ लॉग करते रहिए; पूरा सप्ताह बेसलाइन को सटीक बनाता है।`,
+        `Tumhara goal abhi **baseline phase** me hai (${p.baselineStartDate || active.startDate} – ${p.baselineEndDate || "7 din"}).${dayText} Baseline ke baad ${active.targetReductionPct}% reduction ka target set hoga — tab main tumhe daily reduction bhi bata paunga. Tab tak roz ki activities log karte raho, baseline utna hi sahi banega.`
+      );
+    }
+    const current = p.currentFootprintKg == null ? null : number(p.currentFootprintKg);
+    const target = p.targetFootprintKg == null ? null : number(p.targetFootprintKg);
+    const projected = p.projectedFootprintKg == null ? null : number(p.projectedFootprintKg);
+    const daysLeft = Math.max(0, number(p.daysRemaining));
+    const daily = projected != null && target != null && daysLeft > 0
+      ? Math.max(0, projected - target) / daysLeft
+      : null;
+    const curText = current == null ? "—" : formatNumber(current);
+    const tarText = target == null ? "—" : formatNumber(target);
+    let text = L(
+      `Your goal so far: **${curText} kg** emitted, target ceiling **${tarText} kg**, and **${daysLeft} days** left.`,
+      `आपके लक्ष्य की स्थिति: अब तक **${curText} kg** उत्सर्जन हो चुका है, लक्ष्य सीमा **${tarText} kg** है और **${daysLeft} दिन** बचे हैं।`,
+      `Tumhare goal ka haal: abhi tak **${curText} kg** emit ho chuka hai, target ceiling **${tarText} kg** hai aur **${daysLeft} din** bache hain.`
+    );
+    if (projected != null) {
+      text += L(
+        ` At this pace the projection is **${formatNumber(projected)} kg**.`,
+        ` इस गति से अनुमान **${formatNumber(projected)} kg** है।`,
+        ` Is pace se projection **${formatNumber(projected)} kg** hai.`
+      );
+    }
+    if (daily != null) {
+      text += daily > 0
+        ? L(
+          ` To finish on target, cut about **${formatNumber(daily)} kg CO₂e per day**.`,
+          ` लक्ष्य पर खत्म करने के लिए रोज़ लगभग **${formatNumber(daily)} kg CO₂e कम** करना होगा।`,
+          ` Target par rehne ke liye roz lagbhag **${formatNumber(daily)} kg CO₂e kam** karna hoga.`
+        )
+        : L(
+          " You are right on pace — no extra daily cut is needed.",
+          " आप बिल्कुल सही गति पर हैं — कोई अतिरिक्त कटौती नहीं चाहिए।",
+          " Tum bilkul pace par ho — koi extra katauti nahi chahiye."
+        );
+    }
+    return text;
+  }
+
+  function answerFor(raw) {
+    const q = ` ${raw.toLowerCase().replace(/[?.,!।]/g, " ")} `;
+    const has = (...words) => words.some((w) => q.includes(w));
+
+    if (/^(hi|hello|hey|namaste|namaskar)\b/.test(q.trim()) || q.includes("नमस्ते") || q.includes("नमस्कार")) {
+      return L(
+        `Hello ${data.username || "there"}! I can quote your dashboard numbers — footprint, biggest source, goal, streak, week comparison, month-end projection and tips. Just ask.`,
+        `नमस्ते ${data.username || "मित्र"}! मैं आपके डैशबोर्ड के आँकड़े बता सकता हूँ — फुटप्रिंट, सबसे बड़ा स्रोत, लक्ष्य, स्ट्रीक, सप्ताह की तुलना, महीने के अंत का अनुमान और सुझाव। बस पूछिए।`,
+        `Namaste ${data.username || "dost"}! Main tumhare dashboard ke number bol sakta hu — footprint, sabse bada source, goal, streak, hafte ki tulna, mahine ka projection aur tips. Bas puch lo.`
+      );
+    }
+
+    const answerBadges = () => {
+      if (badges === null) return L(
+        "Your badge information is still loading — ask again in a moment. All your badges are also on the Badges page.",
+        "आपके बैज की जानकारी अभी लोड हो रही है — एक क्षण बाद फिर पूछिए। सारे बैज Badges पेज पर भी दिखते हैं।",
+        "Badges ki jaankari abhi load ho rahi hai — ek pal baad phir pucho. Badges page par saare badges ek saath dikhte hain."
+      );
+      if (!badges.length) return L(
+        "You haven't earned any badges yet. Log activities daily and complete a goal — streak and goal badges are awarded automatically. See the full gallery on the Badges page.",
+        "आपने अभी तक कोई बैज नहीं कमाया है। रोज़ गतिविधि लॉग कीजिए और लक्ष्य पूरा कीजिए — स्ट्रीक और लक्ष्य वाले बैज अपने आप मिलते हैं। पूरी गैलरी Badges पेज पर है।",
+        "Abhi tak koi badge earn nahi hua hai. Roz activity log karo aur goal pura karo — streak aur goal-achieved par badges apne aap milte hain. Poori gallery Badges page par hai."
+      );
+      const names = badges.map((b) => b.name || b.badgeName).filter(Boolean).join(", ");
+      return L(
+        `You have earned **${badges.length} badge${badges.length === 1 ? "" : "s"}**: ${names}. See the full gallery on the Badges page.`,
+        `आपने अब तक **${badges.length} बैज** कमाए हैं: ${names}। पूरी गैलरी Badges पेज पर दिखती है।`,
+        `Tumne abhi tak **${badges.length} badge** earn kiye hain: ${names}. Badges page par poori gallery dikhti hai.`
+      );
+    };
+
+    const answerStreak = () => {
+      const s = data.streak || 0;
+      if (s <= 0) return L(
+        "Your streak is 0 right now. Log one activity today — that's where a streak starts.",
+        "अभी आपकी स्ट्रीक 0 है। आज एक गतिविधि लॉग कीजिए — स्ट्रीक वहीं से शुरू होगी।",
+        "Abhi tumhari streak 0 hai. Aaj ek activity log karo — streak wahi se shuru hogi."
+      );
+      return L(
+        `Your logging streak is **${s} day${s === 1 ? "" : "s"}**. ${s >= 7 ? "A full week — congratulations! Keep it going." : "Log every day to build it up — 7 days makes a full week."}`,
+        `आपकी लॉगिंग स्ट्रीक **${s} दिन** की है। ${s >= 7 ? "पूरा सप्ताह — बधाई हो! ऐसे ही जारी रखिए।" : "रोज़ लॉग करते रहिए — 7 दिन पूरे होने पर पूरा सप्ताह बन जाएगा।"}`,
+        `Tumhari logging streak **${s} din** ki hai. ${s >= 7 ? "Ek hafta pura — badhai ho! Aise hi chalti rahe." : "Roz log karte raho — 7 din pure karne par streak aur majboot hogi."}`
+      );
+    };
+
+    const answerTip = () => {
+      const tips = allTips();
+      if (!tips.length) return L(
+        "I need a bit more data for good tips — log a few more activities and I'll advise you based on your biggest source.",
+        "अच्छे सुझावों के लिए थोड़ा और डेटा चाहिए — कुछ और गतिविधियाँ लॉग कीजिए, फिर मैं आपके सबसे बड़े स्रोत के हिसाब से सलाह दूँगा।",
+        "Abhi tips ke liye data kam hai — kuch aur activities log karo, phir main tumhare sabse bade source ke hisaab se sahi salah dunga."
+      );
+      const item = tips[tipIndexRef.current % tips.length];
+      tipIndexRef.current += 1;
+      const top = topCategory();
+      return L(
+        `**Tip (${pretty(item.type)}):** ${item.tip}${top ? ` Your biggest source is ${pretty(top.category)} (${formatNumber(top.totalEmissionsKg)} kg), so changing a habit there saves the most.` : ""} Type "tip" again for another one.`,
+        `**सुझाव (${pretty(item.type)}):** ${item.tip}${top ? ` आपका सबसे बड़ा स्रोत ${pretty(top.category)} है (${formatNumber(top.totalEmissionsKg)} kg), इसलिए वहीं की आदत बदलना सबसे ज़्यादा बचत देगा।` : ""} एक और सुझाव के लिए फिर "सुझाव" लिखिए।`,
+        `**Tip (${pretty(item.type)}):** ${item.tip}${top ? ` Tumhara sabse bada source ${pretty(top.category)} hai (${formatNumber(top.totalEmissionsKg)} kg), isiliye wahin ki aadat badalna sabse zyada fayda dega.` : ""} Aur tip chahiye to phir "tip" likho.`
+      );
+    };
+
+    const answerCar = () => {
+      const c = categoryByKey("transport");
+      const carTips = (data.recommendations || []).find((r) => String(r.activityType || "").includes("car"));
+      const tip0 = carTips?.recommendations?.[0];
+      if (!c || number(c.totalEmissionsKg) <= 0) return L(
+        "No transport activity is logged in this period yet. Log a car or bus trip and I'll quote the number right here.",
+        "इस अवधि में अभी कोई परिवहन गतिविधि लॉग नहीं है। एक कार या बस यात्रा लॉग करके देखिए — संख्या यहीं बता दूँगा।",
+        "Is period me abhi koi transport activity log nahi hai. Ek car ya bus activity log karke dekho — number yahin bol dunga."
+      );
+      return L(
+        `Transport accounts for **${formatNumber(c.totalEmissionsKg)} kg CO₂e** this period.${tip0 ? ` Easiest way to cut it: ${tip0}` : ""}`,
+        `इस अवधि में परिवहन से **${formatNumber(c.totalEmissionsKg)} kg CO₂e** बना है।${tip0 ? ` इसे कम करने का सबसे आसान तरीका: ${tip0}` : ""}`,
+        `Transport se is period me **${formatNumber(c.totalEmissionsKg)} kg CO₂e** bana hai.${tip0 ? ` Kam karne ka sabse asaan tareeka: ${tip0}` : ""}`
+      );
+    };
+
+    const answerElectricity = () => {
+      const c = categoryByKey("electricity");
+      const t = (data.recommendations || []).find((r) => String(r.activityType || "").includes("electric"));
+      const tip0 = t?.recommendations?.[0];
+      if (!c || number(c.totalEmissionsKg) <= 0) return L(
+        "No electricity activity is logged in this period yet.",
+        "इस अवधि में अभी कोई बिजली गतिविधि लॉग नहीं है।",
+        "Is period me abhi koi electricity activity log nahi hai."
+      );
+      return L(
+        `Electricity accounts for **${formatNumber(c.totalEmissionsKg)} kg CO₂e** this period.${tip0 ? ` Tip: ${tip0}` : ""}`,
+        `इस अवधि में बिजली से **${formatNumber(c.totalEmissionsKg)} kg CO₂e** बना है।${tip0 ? ` सुझाव: ${tip0}` : ""}`,
+        `Electricity se is period me **${formatNumber(c.totalEmissionsKg)} kg CO₂e** bana hai.${tip0 ? ` Tip: ${tip0}` : ""}`
+      );
+    };
+
+    const answerFood = () => {
+      const c = categoryByKey("food");
+      if (!c || number(c.totalEmissionsKg) <= 0) return L(
+        "No food activity is logged in this period yet. Log a meal from the Food tab in Log Activity and I'll tell you its share. In general, a plant-based meal is the lightest choice.",
+        "इस अवधि में अभी कोई भोजन गतिविधि लॉग नहीं है। Log Activity के Food टैब से एक भोजन लॉग कीजिए — मैं उसका हिस्सा बता दूँगा। आम तौर पर पौध-आधारित (plant-based) भोजन सबसे हल्का पड़ता है।",
+        "Is period me abhi koi food activity log nahi hai. Log Activity ke Food tab se ek meal log karo — main uska hissa bata dunga. Aam taur par plant-based meal sabse halka padta hai."
+      );
+      return L(
+        `Food accounts for **${formatNumber(c.totalEmissionsKg)} kg CO₂e** this period.`,
+        `इस अवधि में भोजन से **${formatNumber(c.totalEmissionsKg)} kg CO₂e** बना है।`,
+        `Food se is period me **${formatNumber(c.totalEmissionsKg)} kg CO₂e** bana hai.`
+      );
+    };
+
+    const answerShopping = () => {
+      const c = categoryByKey("shopping");
+      if (!c || number(c.totalEmissionsKg) <= 0) return L(
+        "No shopping activity is logged in this period yet. Make your first entry from the Shopping tab in Log Activity.",
+        "इस अवधि में अभी कोई खरीदारी गतिविधि लॉग नहीं है। Log Activity के Shopping टैब से पहली प्रविष्टि करके देखिए।",
+        "Is period me abhi koi shopping activity log nahi hai. Log Activity ke Shopping tab se pehli entry karke dekho."
+      );
+      return L(
+        `Shopping accounts for **${formatNumber(c.totalEmissionsKg)} kg CO₂e** this period.`,
+        `इस अवधि में खरीदारी से **${formatNumber(c.totalEmissionsKg)} kg CO₂e** बना है।`,
+        `Shopping se is period me **${formatNumber(c.totalEmissionsKg)} kg CO₂e** bana hai.`
+      );
+    };
+
+    const answerWeek = () => {
+      const cur = (data.weeklyData || []).reduce((s, d) => s + number(d["Current Week"]), 0);
+      const prev = (data.weeklyData || []).reduce((s, d) => s + number(d["Previous Week"]), 0);
+      if (prev === 0 && cur > 0) return L(
+        `This week so far: **${formatNumber(cur)} kg**; last week was 0 — this is your first active week. From next week I can also give you the % difference.`,
+        `इस सप्ताह अब तक **${formatNumber(cur)} kg** है और पिछला सप्ताह 0 था — यह आपका पहला सक्रिय सप्ताह है। अगले सप्ताह से मैं % में अंतर भी बता पाऊँगा।`,
+        `Is hafte abhi tak **${formatNumber(cur)} kg** hai aur pichhla hafta 0 tha — ye tumhara pehla active hafta hai. Agle hafte se main tumhe % me farak bhi bata paunga.`
+      );
+      if (prev === 0 && cur === 0) return L(
+        "No activities this week or last week yet. Log your first activity — the comparison starts there.",
+        "इस सप्ताह और पिछले सप्ताह — दोनों में अभी कोई गतिविधि नहीं है। पहली गतिविधि लॉग कीजिए, तुलना वहीं से शुरू होगी।",
+        "Is hafte aur pichhle hafte — dono me abhi koi activity nahi hai. Pehli activity log karo, tulna wahi se shuru hogi."
+      );
+      const pct = Math.abs(((cur - prev) / prev) * 100).toFixed(0);
+      return cur <= prev
+        ? L(
+          `This week **${formatNumber(cur)} kg** vs last week **${formatNumber(prev)} kg** — that's **${pct}% lower** this week. Excellent — exactly the pace you want!`,
+          `इस सप्ताह **${formatNumber(cur)} kg**, पिछले सप्ताह **${formatNumber(prev)} kg** — मतलब इस सप्ताह **${pct}% कम**। बहुत बढ़िया, यही गति चाहिए!`,
+          `Is hafte **${formatNumber(cur)} kg**, pichhle hafte **${formatNumber(prev)} kg** — matlab is hafte **${pct}% kam**. Bahut badhiya, yahi pace chahiye!`
+        )
+        : L(
+          `This week **${formatNumber(cur)} kg** vs last week **${formatNumber(prev)} kg** — **${pct}% higher** this week. Type "tip" and we'll start with your biggest source.`,
+          `इस सप्ताह **${formatNumber(cur)} kg**, पिछले सप्ताह **${formatNumber(prev)} kg** — इस सप्ताह **${pct}% ज़्यादा** है। "सुझाव" लिखिए, सबसे बड़े स्रोत से शुरू करेंगे।`,
+          `Is hafte **${formatNumber(cur)} kg**, pichhle hafte **${formatNumber(prev)} kg** — is hafte **${pct}% zyada** hai. Ek tip ke liye "tip" likho, sabse bade source se shuru karenge.`
+        );
+    };
+
+    const answerProjection = () => (data.projectedMonthEnd != null
+      ? L(
+        `At your recent 7-day trend, your footprint could reach about **${formatNumber(data.projectedMonthEnd)} kg CO₂e** by the end of this month. You can see the same estimate as the blue dashed line in the Monthly chart.`,
+        `आपके पिछले 7 दिनों के रुझान के हिसाब से इस महीने के अंत तक आपका फुटप्रिंट लगभग **${formatNumber(data.projectedMonthEnd)} kg CO₂e** तक जा सकता है। यही अनुमान Monthly चार्ट की नीली डैश वाली रेखा में भी दिखता है।`,
+        `Recent 7 din ke trend ke hisaab se is mahine ke aakhir tak tumhara footprint lagbhag **${formatNumber(data.projectedMonthEnd)} kg CO₂e** tak ja sakta hai. Ye andaza Monthly chart ki neeli dashed line me bhi dikhta hai.`
+      )
+      : L(
+        "I need a few more days of data for a projection — keep logging and I'll estimate your month-end.",
+        "अनुमान के लिए अभी डेटा कम है — कुछ दिन और लॉग कीजिए, फिर महीने के अंत का अनुमान दूँगा।",
+        "Projection ke liye abhi data kam hai — kuch din aur log karo, phir mahine ke aakhir ka andaza dunga."
+      ));
+
+    const answerHighestDay = () => {
+      const rows = (data.weeklyData || []).filter((d) => number(d["Current Week"]) > 0);
+      if (!rows.length) return L(
+        "No day stands out this week yet — nothing is logged so far. Log an activity and ask me again.",
+        "इस सप्ताह अभी कोई दिन अलग नहीं दिख रहा — अभी तक कुछ लॉग नहीं हुआ है। एक गतिविधि लॉग करके फिर पूछिए।",
+        "Is hafte abhi koi din alag nahi dikh raha — abhi tak kuch log nahi hua hai. Ek activity log karke phir pucho."
+      );
+      const best = [...rows].sort((a, b) => number(b["Current Week"]) - number(a["Current Week"]))[0];
+      return L(
+        `Your highest day this week was **${best.day} — ${formatNumber(best["Current Week"])} kg CO₂e**.`,
+        `इस सप्ताह आपका सबसे ज़्यादा उत्सर्जन वाला दिन **${best.day} — ${formatNumber(best["Current Week"])} kg CO₂e** रहा।`,
+        `Is hafte tumhara sabse zyada wala din **${best.day} — ${formatNumber(best["Current Week"])} kg CO₂e** raha.`
+      );
+    };
+
+    const answerActivityCount = () => {
+      const n = (data.activities || []).length;
+      if (!n) return L(
+        "No activities are logged in this period yet. Log your first one from Log Activity.",
+        "इस अवधि में अभी कोई गतिविधि लॉग नहीं है। Log Activity से पहली गतिविधि लॉग कीजिए।",
+        "Is period me abhi koi activity log nahi hai. Log Activity se pehli activity log karo."
+      );
+      return L(
+        `You have logged **${n} activit${n === 1 ? "y" : "ies"}** in this period, adding up to **${data.totalKg == null ? "—" : formatNumber(data.totalKg)} kg CO₂e**.`,
+        `इस अवधि में आपने **${n} गतिविधियाँ** लॉग की हैं, जिनका कुल योग **${data.totalKg == null ? "—" : formatNumber(data.totalKg)} kg CO₂e** है।`,
+        `Is period me tumne **${n} activities** log ki hain, jinka total **${data.totalKg == null ? "—" : formatNumber(data.totalKg)} kg CO₂e** hai.`
+      );
+    };
+
+    const answerDailyAverage = () => {
+      const days = new Set((data.activities || []).map((a) => a.logDate).filter(Boolean));
+      if (!days.size || data.totalKg == null) return L(
+        "Not enough data yet for a daily average — log a few activities first.",
+        "रोज़ के औसत के लिए अभी डेटा कम है — पहले कुछ गतिविधियाँ लॉग कीजिए।",
+        "Roz ke average ke liye abhi data kam hai — pehle kuch activities log karo."
+      );
+      const avg = data.totalKg / days.size;
+      return L(
+        `Your average is **${formatNumber(avg)} kg CO₂e per logged day** (${formatNumber(data.totalKg)} kg over ${days.size} logged day${days.size === 1 ? "" : "s"} this period).`,
+        `आपका औसत **${formatNumber(avg)} kg CO₂e प्रति लॉग-दिन** है (इस अवधि में ${days.size} लॉग-दिनों में कुल ${formatNumber(data.totalKg)} kg)।`,
+        `Tumhara average **${formatNumber(avg)} kg CO₂e per logged day** hai (is period me ${days.size} logged dinon me total ${formatNumber(data.totalKg)} kg).`
+      );
+    };
+
+    const answerTopSource = () => {
+      const top = topCategory();
+      if (!top) return L(
+        "No activity data yet — log your first activity and I'll name your biggest source.",
+        "अभी कोई गतिविधि डेटा नहीं है — पहली गतिविधि लॉग कीजिए, फिर सबसे बड़ा स्रोत बता दूँगा।",
+        "Abhi koi activity data nahi hai — pehli activity log karo, phir sabse bada source bata dunga."
+      );
+      const share = data.totalKg ? (number(top.totalEmissionsKg) / data.totalKg) * 100 : 0;
+      return L(
+        `Your biggest source is **${pretty(top.category)} — ${formatNumber(top.totalEmissionsKg)} kg** (about ${share.toFixed(0)}% of your total). That's where cutting helps the most.`,
+        `सबसे बड़ा स्रोत है **${pretty(top.category)} — ${formatNumber(top.totalEmissionsKg)} kg** (कुल का लगभग ${share.toFixed(0)}%)। कटौती की शुरुआत यहीं से करनी चाहिए।`,
+        `Sabse bada source hai **${pretty(top.category)} — ${formatNumber(top.totalEmissionsKg)} kg** (kul ka lagbhag ${share.toFixed(0)}%). Kam karne ki shuruaat yahi se karni chahiye.`
+      );
+    };
+
+    const answerFootprint = () => {
+      const top = topCategory();
+      return L(
+        `Today's footprint is **${formatNumber(data.todayFootprint)} kg CO₂e**. This period's total is **${data.totalKg == null ? "—" : formatNumber(data.totalKg)} kg**${top ? `, with the biggest share from ${pretty(top.category)} (${formatNumber(top.totalEmissionsKg)} kg)` : ""}.`,
+        `आज का फुटप्रिंट **${formatNumber(data.todayFootprint)} kg CO₂e** है। इस अवधि का कुल **${data.totalKg == null ? "—" : formatNumber(data.totalKg)} kg** है${top ? `, जिसमें सबसे बड़ा हिस्सा ${pretty(top.category)} का है (${formatNumber(top.totalEmissionsKg)} kg)` : ""}।`,
+        `Aaj ka footprint **${formatNumber(data.todayFootprint)} kg CO₂e** hai. Is period ka total **${data.totalKg == null ? "—" : formatNumber(data.totalKg)} kg** hai${top ? `, jisme sabse bada hissa ${pretty(top.category)} ka hai (${formatNumber(top.totalEmissionsKg)} kg)` : ""}.`
+      );
+    };
+
+    const answerHelp = () => L(
+      "I can answer questions about:\n• Today's / total footprint\n• Your biggest emission source\n• Goal and baseline status\n• Logging streak\n• This week vs last week\n• Month-end projection\n• Tips to reduce\n• Your badges\n• Activities logged, highest day, daily average",
+      "मैं इन सवालों के जवाब दे सकता हूँ:\n• आज का / कुल फुटप्रिंट\n• आपका सबसे बड़ा उत्सर्जन स्रोत\n• लक्ष्य और बेसलाइन की स्थिति\n• लॉगिंग स्ट्रीक\n• इस सप्ताह बनाम पिछला सप्ताह\n• महीने के अंत का अनुमान\n• कम करने के सुझाव\n• आपके बैज\n• लॉग की गई गतिविधियाँ, सबसे ज़्यादा वाला दिन, रोज़ का औसत",
+      "Main in sawalon ke jawab de sakta hu:\n• Aaj ka / total footprint\n• Sabse bada emission source\n• Goal aur baseline ka haal\n• Logging streak\n• Is hafte vs pichhla hafta\n• Mahine ke aakhir ka projection\n• Kam karne ke tips\n• Mere badges\n• Activities ki ginti, sabse zyada wala din, roz ka average"
+    );
+
+    const answerThanks = () => L(
+      "You're welcome! Ask me anytime — footprint, goal or a tip.",
+      "कोई बात नहीं! कभी भी पूछिए — फुटप्रिंट, लक्ष्य या सुझाव।",
+      "Koi baat nahi! Kuch aur janna ho — footprint, goal ya tip — bas puch lo."
+    );
+
+    // Scoring match: the intent whose keywords match the question best wins,
+    // so the user can phrase a related question in their own words.
+    const INTENTS = [
+      { keys: ["badge", "achievement", "बैज", "my badges", "मेरे बैज"], run: answerBadges },
+      { keys: ["goal", "target", "baseline", "progress", "लक्ष्य", "बेसलाइन", "टारगेट", "goal status", "mera goal"], run: goalAnswer },
+      { keys: ["streak", "स्ट्रीक", "लगातार"], run: answerStreak },
+      { keys: ["tip", "suggest", "advice", "reduce", "reduce my", "how to reduce", "kaise kam", "kam kar", "बचत", "सुझाव", "सलाह", "टिप", "उपाय", "कम कैसे"], run: answerTip },
+      { keys: [" car ", "transport", "driving", "drive", "vehicle", "petrol", "diesel", "bike", " bus ", "travel", " कार ", "परिवहन", "गाड़ी", "यात्रा"], run: answerCar },
+      { keys: ["electricity", "bijli", "energy", "power", "बिजली", "units", "kwh"], run: answerElectricity },
+      { keys: ["food", "khana", "khane", "meal", "diet", "भोजन", "खाने", "आहार", "lunch", "dinner", "breakfast", "नाश्ता"], run: answerFood },
+      { keys: ["shopping", "kharidari", "clothes", "kapde", "खरीदारी", "शॉपिंग", "कपड़े", "सामान"], run: answerShopping },
+      { keys: ["week", "hafta", "hafte", "सप्ताह", "हफ्ता", "last week", "previous week", "pichhla", "तुलना", "compare", "comparison", " vs "], run: answerWeek },
+      { keys: ["project", "projection", "mahine ke end", "month end", "month-end", "end of month", "अनुमान", "प्रोजेक्शन", "kitna hoga", "कितना होगा", "future"], run: answerProjection },
+      { keys: ["highest day", "sabse zyada wala din", "सबसे ज़्यादा वाला दिन", "worst day", "peak day", "heaviest day", "kis din sabse", "किस दिन सबसे"], run: answerHighestDay },
+      { keys: ["how many activities", "number of activities", "activities logged", "total activities", "kitni activit", "कितनी गतिविधियाँ", "गतिविधियाँ कितनी", "entries", "कितनी एंट्री"], run: answerActivityCount },
+      { keys: ["daily average", "average per day", "per day", "average", "औसत", "roz ka average", "रोज़ का औसत"], run: answerDailyAverage },
+      { keys: ["sabse zyada", "sabse bada", "biggest", "source", "सबसे बड़ा", "सबसे ज़्यादा", "स्रोत", "which is highest", "sabse adhik", "सबसे अधिक", "main source"], run: answerTopSource },
+      { keys: ["footprint", "emission", "carbon", "total", "today", "aaj", "फुटप्रिंट", "उत्सर्जन", "कार्बन", "co2", "overall", "कुल कितना"], run: answerFootprint },
+      { keys: ["help", "kya kar sakte", "kya kya", "options", "मदद", "what can you do"], run: answerHelp },
+      { keys: ["thank", "shukriya", "dhanyavad", "धन्यवाद", "शुक्रिया"], run: answerThanks },
+    ];
+
+    let best = null;
+    let bestScore = 0;
+    INTENTS.forEach((intent) => {
+      const score = intent.keys.reduce((sum, k) => (q.includes(k) ? sum + (k.includes(" ") ? 2 : 1) : sum), 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = intent;
+      }
+    });
+    if (best) return best.run();
+
+    return L(
+      "That question is outside what I know — I answer from your dashboard data. Ask me about your footprint, biggest source, goal, streak, week comparison, projection, badges or tips. Type \"help\" for the full list.",
+      "यह सवाल मेरी समझ से बाहर है — मैं आपके डैशबोर्ड के डेटा से जवाब देता हूँ। फुटप्रिंट, सबसे बड़ा स्रोत, लक्ष्य, स्ट्रीक, सप्ताह की तुलना, अनुमान, बैज या सुझावों के बारे में पूछिए। पूरी सूची के लिए \"help\" लिखिए।",
+      "Ye sawal meri samajh se bahar hai — main tumhare dashboard ke data par jawab deta hu. Footprint, sabse bada source, goal, streak, hafte ki tulna, projection, badges ya tips ke baare me pucho. \"help\" likhne se poori list mil jayegi."
+    );
+  }
+
+  function ask(text) {
+    const question = (text || "").trim();
+    if (!question || typing) return;
+    setMessages((m) => [...m, { from: "user", text: question }]);
+    setInput("");
+    setTyping(true);
+    timerRef.current = setTimeout(() => {
+      setMessages((m) => [...m, { from: "bot", text: answerFor(question) }]);
+      setTyping(false);
+      setChipOffset((o) => o + 5);
+    }, 700);
+  }
+
+  const botBubble = {
+    alignSelf: "flex-start", maxWidth: "85%", background: "#ffffff",
+    border: "1px solid #e2ecdf", borderRadius: 14, borderBottomLeftRadius: 4,
+    padding: "9px 12px", fontSize: 13, lineHeight: 1.5,
+  };
+  const userBubble = {
+    alignSelf: "flex-end", maxWidth: "85%", background: "#21613e", color: "#ffffff",
+    borderRadius: 14, borderBottomRightRadius: 4,
+    padding: "9px 12px", fontSize: 13, lineHeight: 1.5,
+  };
+
+  return (
+    <>
+      {open && (
+        <div style={{
+          position: "fixed", right: 20, bottom: 88, width: 350, maxWidth: "calc(100vw - 32px)",
+          height: 500, maxHeight: "calc(100vh - 120px)", background: "#ffffff", borderRadius: 18,
+          boxShadow: "0 24px 60px rgba(14, 58, 40, 0.35)", border: "1px solid #e2ecdf",
+          display: "flex", flexDirection: "column", overflow: "hidden", zIndex: 1000,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 11, background: "#0e3a28", padding: "12px 14px", color: "#eaf6ee" }}>
+            <span style={{ width: 36, height: 36, borderRadius: "50%", background: "#1d5c3a", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Sprout size={20} style={{ color: "#bfe6cc" }} />
+            </span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.2 }}>Ask CarbonTrack</div>
+              <div style={{ fontSize: 11, color: "#a9d3b6" }}>{L("Online · answers from your live data", "ऑनलाइन · आपके लाइव डेटा से जवाब देता है", "Online · tumhare data se jawab deta hai")}</div>
+            </div>
+            <select value={lang} onChange={(e) => switchLang(e.target.value)} aria-label="Assistant language"
+              style={{ background: "#1d5c3a", color: "#eaf6ee", border: "1px solid #2f7a4e", borderRadius: 8, padding: "5px 7px", fontSize: 12, cursor: "pointer", outline: "none" }}>
+              {ASSISTANT_LANGS.map((l) => (
+                <option key={l.id} value={l.id}>{l.label}</option>
+              ))}
+            </select>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Close assistant"
+              style={{ background: "transparent", border: "none", color: "#eaf6ee", cursor: "pointer", display: "flex", padding: 4 }}>
+              <X size={18} />
+            </button>
+          </div>
+
+          <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "14px 12px", display: "flex", flexDirection: "column", gap: 9, background: "#f4f8f3" }}>
+            {messages.map((m, i) => (
+              <div key={i} style={m.from === "user" ? userBubble : botBubble}>
+                {renderRich(m.text)}
+              </div>
+            ))}
+            {typing && (
+              <div style={{ ...botBubble, color: "#718177" }}>{L("Assistant is typing…", "असिस्टेंट लिख रहा है…", "Assistant likh raha hai…")}</div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap", padding: "9px 12px", background: "#f4f8f3" }}>
+            {visibleChips.map((chip) => (
+              <button key={chip} type="button" onClick={() => ask(chip)}
+                style={{ border: "1.5px solid #21613e", color: "#21613e", background: "#ffffff", borderRadius: 999, padding: "5px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                {chip}
+              </button>
+            ))}
+            <button type="button" onClick={() => setChipOffset((o) => o + 5)}
+              style={{ border: "1.5px dashed #21613e", color: "#21613e", background: "#eef6ef", borderRadius: 999, padding: "5px 11px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              {L("↻ More", "↻ और देखें", "↻ Aur dekho")}
+            </button>
+          </div>
+
+          <form onSubmit={(e) => { e.preventDefault(); ask(input); }}
+            style={{ display: "flex", gap: 8, padding: "11px 12px", background: "#ffffff", borderTop: "1px solid #e2ecdf" }}>
+            <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={L("Type your question…", "अपना सवाल लिखिए…", "Apna sawal likho…")}
+              style={{ flex: 1, minWidth: 0, border: "1px solid #e2ecdf", borderRadius: 999, padding: "9px 13px", fontSize: 13, outline: "none" }} />
+            <button type="submit" aria-label="Send question"
+              style={{ background: "#21613e", color: "#ffffff", border: "none", width: 38, height: 38, borderRadius: "50%", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Send size={16} />
+            </button>
+          </form>
+        </div>
+      )}
+
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-label="Ask CarbonTrack assistant"
+        style={{
+          position: "fixed", right: 20, bottom: 20, width: 56, height: 56, borderRadius: "50%",
+          background: "#21613e", color: "#ffffff", border: "none", cursor: "pointer",
+          boxShadow: "0 12px 28px rgba(14, 58, 40, 0.4)", zIndex: 1000,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+        {open ? <X size={24} /> : <MessageCircle size={26} />}
+      </button>
+    </>
   );
 }
 

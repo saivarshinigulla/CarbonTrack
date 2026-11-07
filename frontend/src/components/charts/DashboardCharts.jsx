@@ -125,8 +125,8 @@ export default function DashboardCharts({
             <h3>{monthlyTarget ? "Monthly Cumulative Emissions vs. Goal Target" : "Monthly Cumulative Emissions"}</h3>
             <p>
               {monthlyTarget
-                ? "Actual emissions compared with the target derived from your active reduction goal."
-                : "Day-by-day accumulated carbon footprint. Create an active reduction goal to display its target trajectory."}
+                ? "Actual emissions and a projection from your recent 7-day trend, compared with the target derived from your active reduction goal."
+                : "Day-by-day accumulated carbon footprint, extended by a projection based on your last 7 days. Create an active reduction goal to display its target trajectory."}
             </p>
           </div>
           <span className="panel-icon"><Target size={18} /></span>
@@ -152,6 +152,14 @@ export default function DashboardCharts({
                 strokeWidth={2.5}
                 fillOpacity={1}
                 fill="url(#actualGrad)"
+              />
+              <Line
+                type="monotone"
+                dataKey="Projected Cumulative"
+                stroke="#0284c7"
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                dot={false}
               />
               {monthlyTarget && (
                 <Line
